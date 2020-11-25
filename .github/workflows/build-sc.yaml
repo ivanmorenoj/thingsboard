@@ -19,8 +19,8 @@ on:
   push:
     branches:
       - 'rebrandSC'
-        #tags:
-        #- 'v*-sc'
+    tags:
+      - 'v*-sc*'
   workflow_dispatch:
 
 jobs:
@@ -44,4 +44,22 @@ jobs:
         with:
           name: build-${{ github.run_id }}	
           path: ${{ github.workspace }}/application/target/thingsboard.deb
-
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+      - name: Upload ThingsBoard deb package
+        id: upload-deb-package
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./application/target/thingsboard.deb
+          asset_name: thingsboard.deb
