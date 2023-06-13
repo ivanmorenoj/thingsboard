@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,9 +15,18 @@
 ///
 
 import { AfterViewInit, Component, ElementRef, forwardRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR } from '@angular/forms';
-import { Observable, Subscription, throwError } from 'rxjs';
-import { map, mergeMap, publishReplay, refCount, tap } from 'rxjs/operators';
+import { ControlValueAccessor, UntypedFormBuilder, UntypedFormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import { Observable, of, Subscription, throwError } from 'rxjs';
+import {
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  map,
+  publishReplay,
+  refCount,
+  switchMap,
+  tap
+} from 'rxjs/operators';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
 import { TranslateService } from '@ngx-translate/core';
@@ -27,6 +36,8 @@ import { BroadcastService } from '@app/core/services/broadcast.service';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { AssetService } from '@core/http/asset.service';
 import { EntityViewService } from '@core/http/entity-view.service';
+import { EdgeService } from '@core/http/edge.service';
+import { MatFormFieldAppearance } from '@angular/material/form-field';
 
 @Component({
   selector: 'tb-entity-subtype-autocomplete',
@@ -40,7 +51,7 @@ import { EntityViewService } from '@core/http/entity-view.service';
 })
 export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor, OnInit, AfterViewInit, OnDestroy {
 
-  subTypeFormGroup: FormGroup;
+  subTypeFormGroup: UntypedFormGroup;
 
   modelValue: string | null;
 
@@ -48,9 +59,11 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
   entityType: EntityType;
 
   private requiredValue: boolean;
+
   get required(): boolean {
     return this.requiredValue;
   }
+
   @Input()
   set required(value: boolean) {
     this.requiredValue = coerceBooleanProperty(value);
@@ -59,11 +72,18 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
   @Input()
   disabled: boolean;
 
+  @Input()
+  excludeSubTypes: Array<string>;
+
+  @Input()
+  appearance: MatFormFieldAppearance = 'fill';
+
   @ViewChild('subTypeInput', {static: true}) subTypeInput: ElementRef;
 
   selectEntitySubtypeText: string;
   entitySubtypeText: string;
   entitySubtypeRequiredText: string;
+  entitySubtypeMaxLength: string;
 
   filteredSubTypes: Observable<Array<string>>;
 
@@ -82,10 +102,11 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
               public translate: TranslateService,
               private deviceService: DeviceService,
               private assetService: AssetService,
+              private edgeService: EdgeService,
               private entityViewService: EntityViewService,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     this.subTypeFormGroup = this.fb.group({
-      subType: [null]
+      subType: [null, Validators.maxLength(255)]
     });
   }
 
@@ -103,6 +124,7 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
         this.selectEntitySubtypeText = 'asset.select-asset-type';
         this.entitySubtypeText = 'asset.asset-type';
         this.entitySubtypeRequiredText = 'asset.asset-type-required';
+        this.entitySubtypeMaxLength = 'asset.asset-type-max-length';
         this.broadcastSubscription = this.broadcast.on('assetSaved', () => {
           this.subTypes = null;
         });
@@ -111,7 +133,17 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
         this.selectEntitySubtypeText = 'device.select-device-type';
         this.entitySubtypeText = 'device.device-type';
         this.entitySubtypeRequiredText = 'device.device-type-required';
+        this.entitySubtypeMaxLength = 'device.device-type-max-length';
         this.broadcastSubscription = this.broadcast.on('deviceSaved', () => {
+          this.subTypes = null;
+        });
+        break;
+      case EntityType.EDGE:
+        this.selectEntitySubtypeText = 'edge.select-edge-type';
+        this.entitySubtypeText = 'edge.edge-type';
+        this.entitySubtypeRequiredText = 'edge.edge-type-required';
+        this.entitySubtypeMaxLength = 'edge.type-max-length';
+        this.broadcastSubscription = this.broadcast.on('edgeSaved', () => {
           this.subTypes = null;
         });
         break;
@@ -119,6 +151,7 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
         this.selectEntitySubtypeText = 'entity-view.select-entity-view-type';
         this.entitySubtypeText = 'entity-view.entity-view-type';
         this.entitySubtypeRequiredText = 'entity-view.entity-view-type-required';
+        this.entitySubtypeMaxLength = 'entity-view.type-max-length'
         this.broadcastSubscription = this.broadcast.on('entityViewSaved', () => {
           this.subTypes = null;
         });
@@ -127,12 +160,14 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
 
     this.filteredSubTypes = this.subTypeFormGroup.get('subType').valueChanges
       .pipe(
+        debounceTime(150),
+        distinctUntilChanged(),
         tap(value => {
-            this.updateView(value);
+          this.updateView(value);
         }),
         // startWith<string | EntitySubtype>(''),
         map(value => value ? value : ''),
-        mergeMap(type => this.fetchSubTypes(type) )
+        switchMap(type => this.fetchSubTypes(type))
       );
   }
 
@@ -182,7 +217,7 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
   fetchSubTypes(searchText?: string, strictMatch: boolean = false): Observable<Array<string>> {
     this.searchText = searchText;
     return this.getSubTypes().pipe(
-      map(subTypes => subTypes.filter( subType => {
+      map(subTypes => subTypes.filter(subType => {
         if (strictMatch) {
           return searchText ? subType === searchText : false;
         } else {
@@ -202,13 +237,22 @@ export class EntitySubTypeAutocompleteComponent implements ControlValueAccessor,
         case EntityType.DEVICE:
           subTypesObservable = this.deviceService.getDeviceTypes({ignoreLoading: true});
           break;
+        case EntityType.EDGE:
+          subTypesObservable = this.edgeService.getEdgeTypes({ignoreLoading: true});
+          break;
         case EntityType.ENTITY_VIEW:
           subTypesObservable = this.entityViewService.getEntityViewTypes({ignoreLoading: true});
           break;
       }
       if (subTypesObservable) {
+        const excludeSubTypesSet = new Set(this.excludeSubTypes);
         this.subTypes = subTypesObservable.pipe(
-          map(subTypes => subTypes.map(subType => subType.type)),
+          catchError(() => of([] as Array<EntitySubtype>)),
+          map(subTypes => {
+            const filteredSubTypes: Array<string> = [];
+            subTypes.forEach(subType => !excludeSubTypesSet.has(subType.type) && filteredSubTypes.push(subType.type));
+            return filteredSubTypes;
+          }),
           publishReplay(1),
           refCount()
         );

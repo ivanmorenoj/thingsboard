@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>org.thingsboard</groupId>
-        <version>3.2.2-SNAPSHOT</version>
+        <version>3.5.1-SNAPSHOT</version>
         <artifactId>msa</artifactId>
     </parent>
     <groupId>org.thingsboard.msa</groupId>
@@ -44,6 +44,7 @@
         <pkg.package.phase>package</pkg.package.phase>
         <pkg.linux.dist>${project.build.directory}/package/linux</pkg.linux.dist>
         <pkg.win.dist>${project.build.directory}/package/windows</pkg.win.dist>
+        <docker.push-arm-amd-image.phase>pre-integration-test</docker.push-arm-amd-image.phase>
     </properties>
 
     <dependencies>
@@ -68,7 +69,6 @@
             <plugin>
                 <groupId>com.github.eirslett</groupId>
                 <artifactId>frontend-maven-plugin</artifactId>
-                <version>1.7.5</version>
                 <configuration>
                     <installDirectory>target</installDirectory>
                     <workingDirectory>${basedir}</workingDirectory>
@@ -80,8 +80,8 @@
                             <goal>install-node-and-yarn</goal>
                         </goals>
                         <configuration>
-                            <nodeVersion>v12.16.1</nodeVersion>
-                            <yarnVersion>v1.22.4</yarnVersion>
+                            <nodeVersion>v16.15.1</nodeVersion>
+                            <yarnVersion>v1.22.17</yarnVersion>
                         </configuration>
                     </execution>
                     <execution>
@@ -91,6 +91,16 @@
                         </goals>
                         <configuration>
                             <arguments>install</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>yarn pkg</id>
+                        <goals>
+                            <goal>yarn</goal>
+                        </goals>
+                        <phase>compile</phase>
+                        <configuration>
+                            <arguments>run pkg</arguments>
                         </configuration>
                     </execution>
                 </executions>
@@ -140,6 +150,28 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-src-root</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/src</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${basedir}</directory>
+                                    <includes>
+                                        <include>package.json</include>
+                                        <include>yarn.lock</include>
+                                    </includes>
+                                    <filtering>false</filtering>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.thingsboard</groupId>
@@ -196,7 +228,6 @@
                     <plugin>
                         <groupId>com.github.eirslett</groupId>
                         <artifactId>frontend-maven-plugin</artifactId>
-                        <version>1.7.5</version>
                         <configuration>
                             <installDirectory>target</installDirectory>
                             <workingDirectory>${basedir}</workingDirectory>

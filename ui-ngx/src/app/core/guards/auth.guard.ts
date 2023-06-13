@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ import { DialogService } from '@core/services/dialog.service';
 import { TranslateService } from '@ngx-translate/core';
 import { UtilsService } from '@core/services/utils.service';
 import { isObject } from '@core/utils';
+import { MobileService } from '@core/services/mobile.service';
 
 @Injectable({
   providedIn: 'root'
@@ -41,6 +42,7 @@ export class AuthGuard implements CanActivate, CanActivateChild {
               private dialogService: DialogService,
               private utils: UtilsService,
               private translate: TranslateService,
+              private mobileService: MobileService,
               private zone: NgZone) {}
 
   getAuthState(): Observable<AuthState> {
@@ -76,7 +78,7 @@ export class AuthGuard implements CanActivate, CanActivateChild {
         const params = lastChild.params || {};
         const isPublic = data.module === 'public';
 
-        if (!authState.isAuthenticated) {
+        if (!authState.isAuthenticated || isPublic) {
           if (publicId && publicId.length > 0) {
             this.authService.setUserFromJwtToken(null, null, false);
             this.authService.reloadUser();
@@ -92,6 +94,16 @@ export class AuthGuard implements CanActivate, CanActivateChild {
                   return true;
                 })
               );
+            } else if (path === 'login.mfa') {
+              if (authState.authUser?.authority === Authority.PRE_VERIFICATION_TOKEN) {
+                return this.authService.getAvailableTwoFaLoginProviders().pipe(
+                  map(() => {
+                    return true;
+                  })
+                );
+              }
+              this.authService.logout();
+              return of(this.authService.defaultUrl(false));
             } else {
               return of(true);
             }
@@ -107,6 +119,14 @@ export class AuthGuard implements CanActivate, CanActivateChild {
               }
               return of(false);
             }
+          }
+          if (this.mobileService.isMobileApp() && !path.startsWith('dashboard.')) {
+            this.mobileService.handleMobileNavigation(path, params);
+            return of(false);
+          }
+          if (authState.authUser.authority === Authority.PRE_VERIFICATION_TOKEN) {
+            this.authService.logout();
+            return of(false);
           }
           const defaultUrl = this.authService.defaultUrl(true, authState, path, params);
           if (defaultUrl) {

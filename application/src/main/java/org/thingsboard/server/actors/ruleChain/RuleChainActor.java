@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import org.thingsboard.server.actors.TbActor;
 import org.thingsboard.server.actors.TbActorCtx;
 import org.thingsboard.server.actors.TbActorId;
 import org.thingsboard.server.actors.TbEntityActorId;
-import org.thingsboard.server.actors.service.ComponentActor;
 import org.thingsboard.server.actors.service.ContextBasedCreator;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
@@ -30,7 +29,7 @@ import org.thingsboard.server.common.msg.plugin.ComponentLifecycleMsg;
 import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
 import org.thingsboard.server.common.msg.queue.QueueToRuleEngineMsg;
 
-public class RuleChainActor extends ComponentActor<RuleChainId, RuleChainActorMessageProcessor> {
+public class RuleChainActor extends RuleEngineComponentActor<RuleChainId, RuleChainActorMessageProcessor> {
 
     private final RuleChain ruleChain;
 
@@ -59,6 +58,12 @@ public class RuleChainActor extends ComponentActor<RuleChainId, RuleChainActorMe
                 break;
             case RULE_CHAIN_TO_RULE_CHAIN_MSG:
                 processor.onRuleChainToRuleChainMsg((RuleChainToRuleChainMsg) msg);
+                break;
+            case RULE_CHAIN_INPUT_MSG:
+                processor.onRuleChainInputMsg((RuleChainInputMsg) msg);
+                break;
+            case RULE_CHAIN_OUTPUT_MSG:
+                processor.onRuleChainOutputMsg((RuleChainOutputMsg) msg);
                 break;
             case PARTITION_CHANGE_MSG:
                 processor.onPartitionChangeMsg((PartitionChangeMsg) msg);
@@ -93,6 +98,16 @@ public class RuleChainActor extends ComponentActor<RuleChainId, RuleChainActorMe
         public TbActor createActor() {
             return new RuleChainActor(context, tenantId, ruleChain);
         }
+    }
+
+    @Override
+    protected RuleChainId getRuleChainId() {
+        return ruleChain.getId();
+    }
+
+    @Override
+    protected String getRuleChainName() {
+        return ruleChain.getName();
     }
 
     @Override

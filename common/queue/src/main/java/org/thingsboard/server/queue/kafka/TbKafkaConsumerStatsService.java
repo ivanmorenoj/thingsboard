@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,10 +25,12 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.queue.discovery.PartitionService;
@@ -55,7 +57,10 @@ public class TbKafkaConsumerStatsService {
 
     private final TbKafkaSettings kafkaSettings;
     private final TbKafkaConsumerStatisticConfig statsConfig;
-    private final PartitionService partitionService;
+
+    @Lazy
+    @Autowired
+    private PartitionService partitionService;
 
     private AdminClient adminClient;
     private Consumer<String, byte[]> consumer;
@@ -69,7 +74,7 @@ public class TbKafkaConsumerStatsService {
         this.adminClient = AdminClient.create(kafkaSettings.toAdminProps());
         this.statsPrintScheduler = Executors.newSingleThreadScheduledExecutor(ThingsBoardThreadFactory.forName("kafka-consumer-stats"));
 
-        Properties consumerProps = kafkaSettings.toConsumerProps();
+        Properties consumerProps = kafkaSettings.toConsumerProps(null);
         consumerProps.put(ConsumerConfig.CLIENT_ID_CONFIG, "consumer-stats-loader-client");
         consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "consumer-stats-loader-client-group");
         this.consumer = new KafkaConsumer<>(consumerProps);

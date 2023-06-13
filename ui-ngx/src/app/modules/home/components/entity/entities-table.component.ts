@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -31,19 +31,20 @@ import {
 import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { MAX_SAFE_PAGE_SIZE, PageLink, TimePageLink } from '@shared/models/page/page-link';
+import { MAX_SAFE_PAGE_SIZE, PageLink, PageQueryParam, TimePageLink } from '@shared/models/page/page-link';
 import { MatDialog } from '@angular/material/dialog';
 import { MatPaginator } from '@angular/material/paginator';
-import { MatSort } from '@angular/material/sort';
+import { MatSort, SortDirection } from '@angular/material/sort';
 import { EntitiesDataSource } from '@home/models/datasource/entity-datasource';
-import { catchError, debounceTime, distinctUntilChanged, map, tap } from 'rxjs/operators';
+import { catchError, debounceTime, distinctUntilChanged, map, skip, tap } from 'rxjs/operators';
 import { Direction, SortOrder } from '@shared/models/page/sort-order';
 import { forkJoin, fromEvent, merge, Observable, of, Subscription } from 'rxjs';
 import { TranslateService } from '@ngx-translate/core';
 import { BaseData, HasId } from '@shared/models/base-data';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, QueryParamsHandling, Router } from '@angular/router';
 import {
   CellActionDescriptor,
+  CellActionDescriptorType,
   EntityActionTableColumn,
   EntityColumn,
   EntityTableColumn,
@@ -55,15 +56,15 @@ import { EntityTypeTranslation } from '@shared/models/entity-type.models';
 import { DialogService } from '@core/services/dialog.service';
 import { AddEntityDialogComponent } from './add-entity-dialog.component';
 import { AddEntityDialogData, EntityAction } from '@home/models/entity/entity-component.models';
-import {
-  calculateIntervalStartEndTime,
-  HistoryWindowType,
-  Timewindow
-} from '@shared/models/time/time.models';
+import { calculateIntervalStartEndTime, HistoryWindowType, Timewindow } from '@shared/models/time/time.models';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { TbAnchorComponent } from '@shared/components/tb-anchor.component';
-import { isDefined, isUndefined } from '@core/utils';
+import { isDefined, isEmptyStr, isEqual, isString, isUndefined } from '@core/utils';
 import { HasUUID } from '@shared/models/id/has-uuid';
+import { ResizeObserver } from '@juggle/resize-observer';
+import { hidePageSizePixelValue } from '@shared/models/constants';
+import { EntitiesTableAction, IEntitiesTableComponent } from '@home/models/entity/entity-table-component.models';
+import { EntityDetailsPanelComponent } from '@home/components/entity/entity-details-panel.component';
 
 @Component({
   selector: 'tb-entities-table',
@@ -71,7 +72,7 @@ import { HasUUID } from '@shared/models/id/has-uuid';
   styleUrls: ['./entities-table.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class EntitiesTableComponent extends PageComponent implements AfterViewInit, OnInit, OnChanges {
+export class EntitiesTableComponent extends PageComponent implements IEntitiesTableComponent, AfterViewInit, OnInit, OnChanges {
 
   @Input()
   entitiesTableConfig: EntityTableConfig<BaseData<HasId>>;
@@ -98,11 +99,15 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
 
   defaultPageSize = 10;
   displayPagination = true;
+  hidePageSize = false;
   pageSizeOptions;
   pageLink: PageLink;
+  pageMode = true;
   textSearchMode = false;
   timewindow: Timewindow;
   dataSource: EntitiesDataSource<BaseData<HasId>>;
+
+  cellActionType = CellActionDescriptorType;
 
   isDetailsOpen = false;
   detailsPanelOpened = new EventEmitter<boolean>();
@@ -114,9 +119,14 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
   @ViewChild(MatPaginator) paginator: MatPaginator;
   @ViewChild(MatSort) sort: MatSort;
 
-  private sortSubscription: Subscription;
+  @ViewChild('entityDetailsPanel') entityDetailsPanel: EntityDetailsPanelComponent;
+
   private updateDataSubscription: Subscription;
   private viewInited = false;
+
+  private widgetResize$: ResizeObserver;
+
+  private rxSubscriptions = new Array<Subscription>();
 
   constructor(protected store: Store<AppState>,
               public route: ActivatedRoute,
@@ -125,7 +135,9 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
               private dialogService: DialogService,
               private domSanitizer: DomSanitizer,
               private cd: ChangeDetectorRef,
-              private componentFactoryResolver: ComponentFactoryResolver) {
+              private router: Router,
+              private componentFactoryResolver: ComponentFactoryResolver,
+              private elementRef: ElementRef) {
     super(store);
   }
 
@@ -133,8 +145,30 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
     if (this.entitiesTableConfig) {
       this.init(this.entitiesTableConfig);
     } else {
-      this.init(this.route.snapshot.data.entitiesTableConfig);
+      this.rxSubscriptions.push(this.route.data.subscribe(
+        (data) => {
+          this.init(data.entitiesTableConfig);
+        }
+      ));
     }
+    this.widgetResize$ = new ResizeObserver(() => {
+      const showHidePageSize = this.elementRef.nativeElement.offsetWidth < hidePageSizePixelValue;
+      if (showHidePageSize !== this.hidePageSize) {
+        this.hidePageSize = showHidePageSize;
+        this.cd.markForCheck();
+      }
+    });
+    this.widgetResize$.observe(this.elementRef.nativeElement);
+  }
+
+  ngOnDestroy() {
+    if (this.widgetResize$) {
+      this.widgetResize$.disconnect();
+    }
+    this.rxSubscriptions.forEach((subscription) => {
+      subscription.unsubscribe();
+    });
+    this.rxSubscriptions.length = 0;
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -151,6 +185,7 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
   private init(entitiesTableConfig: EntityTableConfig<BaseData<HasId>>) {
     this.isDetailsOpen = false;
     this.entitiesTableConfig = entitiesTableConfig;
+    this.pageMode = this.entitiesTableConfig.pageMode;
     if (this.entitiesTableConfig.headerComponent) {
       const componentFactory = this.componentFactoryResolver.resolveComponentFactory(this.entitiesTableConfig.headerComponent);
       const viewContainerRef = this.entityTableHeaderAnchor.viewContainerRef;
@@ -160,7 +195,7 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
       headerComponent.entitiesTableConfig = this.entitiesTableConfig;
     }
 
-    this.entitiesTableConfig.table = this;
+    this.entitiesTableConfig.setTable(this);
     this.translations = this.entitiesTableConfig.entityTranslations;
 
     this.headerActionDescriptors = [...this.entitiesTableConfig.headerActionDescriptors];
@@ -193,8 +228,20 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
 
     this.columnsUpdated();
 
+    const routerQueryParams: PageQueryParam = this.route.snapshot.queryParams;
+
     let sortOrder: SortOrder = null;
-    if (this.entitiesTableConfig.defaultSortOrder) {
+    let initialAction: EntitiesTableAction = null;
+    if (this.pageMode) {
+      initialAction = routerQueryParams?.action;
+      if (this.entitiesTableConfig.defaultSortOrder || routerQueryParams.hasOwnProperty('direction')
+        || routerQueryParams.hasOwnProperty('property')) {
+        sortOrder = {
+          property: routerQueryParams?.property || this.entitiesTableConfig.defaultSortOrder.property,
+          direction: routerQueryParams?.direction || this.entitiesTableConfig.defaultSortOrder.direction
+        };
+      }
+    } else if (this.entitiesTableConfig.defaultSortOrder){
       sortOrder = {
         property: this.entitiesTableConfig.defaultSortOrder.property,
         direction: this.entitiesTableConfig.defaultSortOrder.direction
@@ -207,13 +254,25 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
 
     if (this.entitiesTableConfig.useTimePageLink) {
       this.timewindow = this.entitiesTableConfig.defaultTimewindowInterval;
-      const currentTime = Date.now();
+      const interval = this.getTimePageLinkInterval();
       this.pageLink = new TimePageLink(10, 0, null, sortOrder,
-        currentTime - this.timewindow.history.timewindowMs, currentTime);
+        interval.startTime, interval.endTime);
     } else {
       this.pageLink = new PageLink(10, 0, null, sortOrder);
     }
     this.pageLink.pageSize = this.displayPagination ? this.defaultPageSize : MAX_SAFE_PAGE_SIZE;
+    if (this.pageMode) {
+      if (routerQueryParams.hasOwnProperty('page')) {
+        this.pageLink.page = Number(routerQueryParams.page);
+      }
+      if (routerQueryParams.hasOwnProperty('pageSize')) {
+        this.pageLink.pageSize = Number(routerQueryParams.pageSize);
+      }
+      if (routerQueryParams.hasOwnProperty('textSearch') && !isEmptyStr(routerQueryParams.textSearch)) {
+        this.textSearchMode = true;
+        this.pageLink.textSearch = decodeURI(routerQueryParams.textSearch);
+      }
+    }
     this.dataSource = this.entitiesTableConfig.dataSource(this.dataLoaded.bind(this));
     if (this.entitiesTableConfig.onLoadAction) {
       this.entitiesTableConfig.onLoadAction(this.route);
@@ -226,6 +285,22 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
         this.updatePaginationSubscriptions();
       }, 0);
     }
+    if (this.pageMode) {
+      if (initialAction) {
+        const queryParams: PageQueryParam = {};
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams,
+          queryParamsHandling: '',
+          replaceUrl: true
+        });
+      }
+      if (initialAction === 'add') {
+        setTimeout(() => {
+          this.addEntity(null);
+        }, 0);
+      }
+    }
   }
 
   ngAfterViewInit() {
@@ -235,36 +310,76 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
         debounceTime(150),
         distinctUntilChanged(),
         tap(() => {
+          const queryParams: PageQueryParam = {
+            textSearch: isString(this.pageLink.textSearch) && this.pageLink.textSearch !== '' ? encodeURI(this.pageLink.textSearch) : null
+          };
           if (this.displayPagination) {
             this.paginator.pageIndex = 0;
+            queryParams.page = null;
           }
-          this.updateData();
+          this.updatedRouterParamsAndData(queryParams);
         })
       )
       .subscribe();
+
+    if (this.pageMode) {
+      this.route.queryParams.pipe(skip(1)).subscribe((params: PageQueryParam) => {
+        if (this.displayPagination) {
+          this.paginator.pageIndex = Number(params.page) || 0;
+          this.paginator.pageSize = Number(params.pageSize) || this.defaultPageSize;
+        }
+        this.sort.active = params.property || this.entitiesTableConfig.defaultSortOrder.property;
+        this.sort.direction = (params.direction || this.entitiesTableConfig.defaultSortOrder.direction).toLowerCase() as SortDirection;
+        if (params.hasOwnProperty('textSearch') && !isEmptyStr(params.textSearch)) {
+          this.textSearchMode = true;
+          this.pageLink.textSearch = decodeURI(params.textSearch);
+        } else {
+          this.pageLink.textSearch = null;
+        }
+        this.updateData();
+      });
+    }
 
     this.updatePaginationSubscriptions();
     this.viewInited = true;
   }
 
   private updatePaginationSubscriptions() {
-    if (this.sortSubscription) {
-      this.sortSubscription.unsubscribe();
-      this.sortSubscription = null;
-    }
     if (this.updateDataSubscription) {
       this.updateDataSubscription.unsubscribe();
       this.updateDataSubscription = null;
     }
+    let paginatorSubscription$: Observable<object>;
+    const sortSubscription$: Observable<object> = this.sort.sortChange.asObservable().pipe(
+      map((data) => {
+        const direction = data.direction.toUpperCase();
+        const queryParams: PageQueryParam = {
+          direction: (this.entitiesTableConfig?.defaultSortOrder?.direction === direction ? null : direction) as Direction,
+          property: this.entitiesTableConfig?.defaultSortOrder?.property === data.active ? null : data.active
+        };
+        if (this.displayPagination) {
+          queryParams.page = null;
+          this.paginator.pageIndex = 0;
+        }
+        return queryParams;
+      })
+    );
     if (this.displayPagination) {
-      this.sortSubscription = this.sort.sortChange.subscribe(() => this.paginator.pageIndex = 0);
+      paginatorSubscription$ = this.paginator.page.asObservable().pipe(
+        map((data) => {
+          return {
+            page: data.pageIndex === 0 ? null : data.pageIndex,
+            pageSize: data.pageSize === this.defaultPageSize ? null : data.pageSize
+          };
+        })
+      );
     }
-    this.updateDataSubscription = ((this.displayPagination ? merge(this.sort.sortChange, this.paginator.page)
-      : this.sort.sortChange) as Observable<any>)
-      .pipe(
-        tap(() => this.updateData())
-      )
-      .subscribe();
+    this.updateDataSubscription = ((this.displayPagination ? merge(sortSubscription$, paginatorSubscription$)
+      : sortSubscription$) as Observable<PageQueryParam>).pipe(
+      tap((queryParams) => {
+        this.updatedRouterParamsAndData(queryParams);
+      })
+    ).subscribe();
   }
 
   addEnabled() {
@@ -296,20 +411,39 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
     }
     if (this.entitiesTableConfig.useTimePageLink) {
       const timePageLink = this.pageLink as TimePageLink;
-      if (this.timewindow.history.historyType === HistoryWindowType.LAST_INTERVAL) {
-        const currentTime = Date.now();
-        timePageLink.startTime = currentTime - this.timewindow.history.timewindowMs;
-        timePageLink.endTime = currentTime;
-      } else if (this.timewindow.history.historyType === HistoryWindowType.INTERVAL) {
-        const startEndTime = calculateIntervalStartEndTime(this.timewindow.history.quickInterval);
-        timePageLink.startTime = startEndTime[0];
-        timePageLink.endTime = startEndTime[1];
-      } else {
-        timePageLink.startTime = this.timewindow.history.fixedTimewindow.startTimeMs;
-        timePageLink.endTime = this.timewindow.history.fixedTimewindow.endTimeMs;
-      }
+      const interval = this.getTimePageLinkInterval();
+      timePageLink.startTime = interval.startTime;
+      timePageLink.endTime = interval.endTime;
     }
     this.dataSource.loadEntities(this.pageLink);
+    if (this.isDetailsOpen && this.entityDetailsPanel) {
+      this.entityDetailsPanel.reloadEntity();
+    }
+  }
+
+  private getTimePageLinkInterval(): {startTime?: number, endTime?: number} {
+    const interval: {startTime?: number, endTime?: number} = {};
+    switch (this.timewindow.history.historyType) {
+      case HistoryWindowType.LAST_INTERVAL:
+        const currentTime = Date.now();
+        interval.startTime = currentTime - this.timewindow.history.timewindowMs;
+        interval.endTime = currentTime;
+        break;
+      case HistoryWindowType.FIXED:
+        interval.startTime = this.timewindow.history.fixedTimewindow.startTimeMs;
+        interval.endTime = this.timewindow.history.fixedTimewindow.endTimeMs;
+        break;
+      case HistoryWindowType.INTERVAL:
+        const startEndTime = calculateIntervalStartEndTime(this.timewindow.history.quickInterval);
+        interval.startTime = startEndTime[0];
+        interval.endTime = startEndTime[1];
+        break;
+      case HistoryWindowType.FOR_ALL_TIME:
+        interval.startTime = null;
+        interval.endTime = null;
+        break;
+    }
+    return interval;
   }
 
   private dataLoaded(col?: number, row?: number) {
@@ -430,6 +564,9 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
   }
 
   onTimewindowChange() {
+    if (this.displayPagination) {
+      this.paginator.pageIndex = 0;
+    }
     this.updateData();
   }
 
@@ -445,13 +582,18 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
   exitFilterMode() {
     this.textSearchMode = false;
     this.pageLink.textSearch = null;
+    const queryParams: PageQueryParam = {
+      textSearch: null
+    };
     if (this.displayPagination) {
       this.paginator.pageIndex = 0;
+      queryParams.page = null;
     }
-    this.updateData();
+    this.updatedRouterParamsAndData(queryParams);
   }
 
   resetSortAndFilter(update: boolean = true, preserveTimewindow: boolean = false) {
+    this.textSearchMode = false;
     this.pageLink.textSearch = null;
     if (this.entitiesTableConfig.useTimePageLink && !preserveTimewindow) {
       this.timewindow = this.entitiesTableConfig.defaultTimewindowInterval;
@@ -463,7 +605,7 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
     this.sort.active = sortable.id;
     this.sort.direction = this.entitiesTableConfig.defaultSortOrder.direction === Direction.ASC ? 'asc' : 'desc';
     if (update) {
-      this.updateData();
+      this.updatedRouterParamsAndData({}, '');
     }
   }
 
@@ -526,7 +668,7 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
       const col = this.entitiesTableConfig.columns.indexOf(column);
       const index = row * this.entitiesTableConfig.columns.length + col;
       let res = this.cellContentCache[index];
-      if (!res) {
+      if (isUndefined(res)) {
         res = this.domSanitizer.bypassSecurityTrustHtml(column.cellContentFunction(entity, column.key));
         this.cellContentCache[index] = res;
       }
@@ -581,4 +723,22 @@ export class EntitiesTableComponent extends PageComponent implements AfterViewIn
     return entity.id.id;
   }
 
+  protected updatedRouterParamsAndData(queryParams: object, queryParamsHandling: QueryParamsHandling = 'merge') {
+    if (this.pageMode) {
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams,
+        queryParamsHandling
+      });
+      if (queryParamsHandling === '' && isEqual(this.route.snapshot.queryParams, queryParams)) {
+        this.updateData();
+      }
+    } else {
+      this.updateData();
+    }
+  }
+
+  detectChanges() {
+    this.cd.markForCheck();
+  }
 }

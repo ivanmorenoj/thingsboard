@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 /// limitations under the License.
 ///
 
-import { Component, Inject } from '@angular/core';
+import { ChangeDetectorRef, Component, Inject } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { EntityComponent } from '../../components/entity/entity.component';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import { EntityType } from '@shared/models/entity-type.models';
 import { NULL_UUID } from '@shared/models/id/has-uuid';
 import { ActionNotificationShow } from '@core/notification/notification.actions';
@@ -40,7 +40,7 @@ export class EntityViewComponent extends EntityComponent<EntityViewInfo> {
 
   dataKeyType = DataKeyType;
 
-  entityViewScope: 'tenant' | 'customer' | 'customer_user';
+  entityViewScope: 'tenant' | 'customer' | 'customer_user' | 'edge';
 
   allowedEntityTypes = [EntityType.DEVICE, EntityType.ASSET];
 
@@ -53,8 +53,9 @@ export class EntityViewComponent extends EntityComponent<EntityViewInfo> {
               protected translate: TranslateService,
               @Inject('entity') protected entityValue: EntityViewInfo,
               @Inject('entitiesTableConfig') protected entitiesTableConfigValue: EntityTableConfig<EntityViewInfo>,
-              public fb: FormBuilder) {
-    super(store, fb, entityValue, entitiesTableConfigValue);
+              public fb: UntypedFormBuilder,
+              protected cd: ChangeDetectorRef) {
+    super(store, fb, entityValue, entitiesTableConfigValue, cd);
   }
 
   ngOnInit() {
@@ -77,11 +78,11 @@ export class EntityViewComponent extends EntityComponent<EntityViewInfo> {
     return entity && entity.customerId && entity.customerId.id !== NULL_UUID;
   }
 
-  buildForm(entity: EntityViewInfo): FormGroup {
+  buildForm(entity: EntityViewInfo): UntypedFormGroup {
     return this.fb.group(
       {
-        name: [entity ? entity.name : '', [Validators.required]],
-        type: [entity ? entity.type : null, [Validators.required]],
+        name: [entity ? entity.name : '', [Validators.required, Validators.maxLength(255)]],
+        type: [entity ? entity.type : null, Validators.required],
         entityId: [entity ? entity.entityId : null, [Validators.required]],
         startTimeMs: [entity ? entity.startTimeMs : null],
         endTimeMs: [entity ? entity.endTimeMs : null],

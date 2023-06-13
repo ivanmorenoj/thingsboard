@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package org.thingsboard.server.queue.discovery;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationListener;
+import org.thingsboard.server.queue.discovery.event.TbApplicationEvent;
 
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -39,7 +40,7 @@ public abstract class TbApplicationEventListener<T extends TbApplicationEvent> i
         } finally {
             seqNumberLock.unlock();
         }
-        if (validUpdate) {
+        if (validUpdate && filterTbApplicationEvent(event)) {
             onTbApplicationEvent(event);
         } else {
             log.info("Application event ignored due to invalid sequence number ({} > {}). Event: {}", lastProcessedSequenceNumber, event.getSequenceNumber(), event);
@@ -48,5 +49,8 @@ public abstract class TbApplicationEventListener<T extends TbApplicationEvent> i
 
     protected abstract void onTbApplicationEvent(T event);
 
+    protected boolean filterTbApplicationEvent(T event) {
+        return true;
+    }
 
 }

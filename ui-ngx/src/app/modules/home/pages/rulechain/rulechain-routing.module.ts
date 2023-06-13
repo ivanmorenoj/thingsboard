@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -31,13 +31,17 @@ import { Authority } from '@shared/models/authority.enum';
 import { RuleChainsTableConfigResolver } from '@modules/home/pages/rulechain/rulechains-table-config.resolver';
 import { from, Observable } from 'rxjs';
 import { BreadCrumbConfig, BreadCrumbLabelFunction } from '@shared/components/breadcrumb';
-import { ResolvedRuleChainMetaData, RuleChain } from '@shared/models/rule-chain.models';
+import {
+  RuleChainMetaData,
+  RuleChain, RuleChainType
+} from '@shared/models/rule-chain.models';
 import { RuleChainService } from '@core/http/rule-chain.service';
 import { RuleChainPageComponent } from '@home/pages/rulechain/rulechain-page.component';
 import { RuleNodeComponentDescriptor } from '@shared/models/rule-node.models';
 import { ConfirmOnExitGuard } from '@core/guards/confirm-on-exit.guard';
 import { ItemBufferService } from '@core/public-api';
 import { MODULES_MAP } from '@shared/public-api';
+import { IModulesMap } from '@modules/common/modules-map.models';
 
 @Injectable()
 export class RuleChainResolver implements Resolve<RuleChain> {
@@ -52,14 +56,14 @@ export class RuleChainResolver implements Resolve<RuleChain> {
 }
 
 @Injectable()
-export class ResolvedRuleChainMetaDataResolver implements Resolve<ResolvedRuleChainMetaData> {
+export class RuleChainMetaDataResolver implements Resolve<RuleChainMetaData> {
 
   constructor(private ruleChainService: RuleChainService) {
   }
 
-  resolve(route: ActivatedRouteSnapshot): Observable<ResolvedRuleChainMetaData> {
+  resolve(route: ActivatedRouteSnapshot): Observable<RuleChainMetaData> {
     const ruleChainId = route.params.ruleChainId;
-    return this.ruleChainService.getResolvedRuleChainMetadata(ruleChainId);
+    return this.ruleChainService.getRuleChainMetadata(ruleChainId);
   }
 }
 
@@ -67,11 +71,11 @@ export class ResolvedRuleChainMetaDataResolver implements Resolve<ResolvedRuleCh
 export class RuleNodeComponentsResolver implements Resolve<Array<RuleNodeComponentDescriptor>> {
 
   constructor(private ruleChainService: RuleChainService,
-              @Optional() @Inject(MODULES_MAP) private modulesMap: {[key: string]: any}) {
+              @Optional() @Inject(MODULES_MAP) private modulesMap: IModulesMap) {
   }
 
   resolve(route: ActivatedRouteSnapshot): Observable<Array<RuleNodeComponentDescriptor>> {
-    return this.ruleChainService.getRuleNodeComponents(this.modulesMap);
+    return this.ruleChainService.getRuleNodeComponents(this.modulesMap, route.data.ruleChainType);
   }
 }
 
@@ -133,7 +137,8 @@ const routes: Routes = [
         component: EntitiesTableComponent,
         data: {
           auth: [Authority.TENANT_ADMIN],
-          title: 'rulechain.rulechains'
+          title: 'rulechain.rulechains',
+          ruleChainsType: 'tenant'
         },
         resolve: {
           entitiesTableConfig: RuleChainsTableConfigResolver
@@ -150,11 +155,12 @@ const routes: Routes = [
           } as BreadCrumbConfig<RuleChainPageComponent>,
           auth: [Authority.TENANT_ADMIN],
           title: 'rulechain.rulechain',
-          import: false
+          import: false,
+          ruleChainType: RuleChainType.CORE
         },
         resolve: {
           ruleChain: RuleChainResolver,
-          ruleChainMetaData: ResolvedRuleChainMetaDataResolver,
+          ruleChainMetaData: RuleChainMetaDataResolver,
           ruleNodeComponents: RuleNodeComponentsResolver,
           tooltipster: TooltipsterResolver
         }
@@ -171,7 +177,8 @@ const routes: Routes = [
           } as BreadCrumbConfig<RuleChainPageComponent>,
           auth: [Authority.TENANT_ADMIN],
           title: 'rulechain.rulechain',
-          import: true
+          import: true,
+          ruleChainType: RuleChainType.CORE
         },
         resolve: {
           ruleNodeComponents: RuleNodeComponentsResolver,
@@ -189,7 +196,7 @@ const routes: Routes = [
   providers: [
     RuleChainsTableConfigResolver,
     RuleChainResolver,
-    ResolvedRuleChainMetaDataResolver,
+    RuleChainMetaDataResolver,
     RuleNodeComponentsResolver,
     TooltipsterResolver,
     RuleChainImportGuard

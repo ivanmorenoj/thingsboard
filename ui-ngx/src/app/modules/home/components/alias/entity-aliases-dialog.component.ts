@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -21,12 +21,12 @@ import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import {
   AbstractControl,
-  FormArray,
-  FormBuilder,
-  FormControl,
-  FormGroup,
   FormGroupDirective,
   NgForm,
+  UntypedFormArray,
+  UntypedFormBuilder,
+  UntypedFormControl,
+  UntypedFormGroup,
   Validators
 } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -46,7 +46,7 @@ export interface EntityAliasesDialogData {
   widgets: Array<Widget>;
   isSingleEntityAlias?: boolean;
   isSingleWidget?: boolean;
-  allowedEntityTypes?: Array<AliasEntityType>;
+  allowedEntityTypes?: Array<EntityType | AliasEntityType>;
   disableAdd?: boolean;
   singleEntityAlias?: EntityAlias;
   customTitle?: string;
@@ -67,7 +67,7 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
 
   aliasToWidgetsMap: {[aliasId: string]: Array<string>} = {};
 
-  entityAliasesFormGroup: FormGroup;
+  entityAliasesFormGroup: UntypedFormGroup;
 
   submitted = false;
 
@@ -76,7 +76,7 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
               @Inject(MAT_DIALOG_DATA) public data: EntityAliasesDialogData,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<EntityAliasesDialogComponent, EntityAliases>,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private utils: UtilsService,
               private translate: TranslateService,
               private dialogs: DialogService,
@@ -98,24 +98,18 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
         this.data.widgets.forEach((widget) => {
           if (widget.type === widgetType.rpc) {
             if (widget.config.targetDeviceAliasIds && widget.config.targetDeviceAliasIds.length > 0) {
-              const targetDeviceAliasId = widget.config.targetDeviceAliasIds[0];
-              widgetsTitleList = this.aliasToWidgetsMap[targetDeviceAliasId];
-              if (!widgetsTitleList) {
-                widgetsTitleList = [];
-                this.aliasToWidgetsMap[targetDeviceAliasId] = widgetsTitleList;
-              }
-              widgetsTitleList.push(widget.config.title);
+              this.addWidgetTitleToWidgetsMap(widget.config.targetDeviceAliasIds[0], widget.config.title);
+            }
+          } else if (widget.type === widgetType.alarm) {
+            if (widget.config.alarmSource) {
+              this.addWidgetTitleToWidgetsMap(widget.config.alarmSource.entityAliasId, widget.config.title);
             }
           } else {
             const datasources = this.utils.validateDatasources(widget.config.datasources);
             datasources.forEach((datasource) => {
-              if (datasource.type === DatasourceType.entity && datasource.entityAliasId) {
-                widgetsTitleList = this.aliasToWidgetsMap[datasource.entityAliasId];
-                if (!widgetsTitleList) {
-                  widgetsTitleList = [];
-                  this.aliasToWidgetsMap[datasource.entityAliasId] = widgetsTitleList;
-                }
-                widgetsTitleList.push(widget.config.title);
+              if ([DatasourceType.entity, DatasourceType.entityCount, DatasourceType.alarmCount].includes(datasource.type)
+                && datasource.entityAliasId) {
+                this.addWidgetTitleToWidgetsMap(datasource.entityAliasId, widget.config.title);
               }
             });
           }
@@ -141,6 +135,15 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
     });
   }
 
+  private addWidgetTitleToWidgetsMap(aliasId: string, widgetTitle: string) {
+    let widgetsTitleList: Array<string> = this.aliasToWidgetsMap[aliasId];
+    if (!widgetsTitleList) {
+      widgetsTitleList = [];
+      this.aliasToWidgetsMap[aliasId] = widgetsTitleList;
+    }
+    widgetsTitleList.push(widgetTitle);
+  }
+
   private createEntityAliasFormControl(aliasId: string, entityAlias: EntityAlias): AbstractControl {
     const aliasFormControl = this.fb.group({
       id: [aliasId],
@@ -155,14 +158,14 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
   }
 
 
-  entityAliasesFormArray(): FormArray {
-    return this.entityAliasesFormGroup.get('entityAliases') as FormArray;
+  entityAliasesFormArray(): UntypedFormArray {
+    return this.entityAliasesFormGroup.get('entityAliases') as UntypedFormArray;
   }
 
   ngOnInit(): void {
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -181,7 +184,7 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
       this.dialogs.alert(this.translate.instant('entity.unable-delete-entity-alias-title'),
         message, this.translate.instant('action.close'), true);
     } else {
-      (this.entityAliasesFormGroup.get('entityAliases') as FormArray).removeAt(index);
+      (this.entityAliasesFormGroup.get('entityAliases') as UntypedFormArray).removeAt(index);
       this.entityAliasesFormGroup.markAsDirty();
     }
   }
@@ -214,10 +217,10 @@ export class EntityAliasesDialogComponent extends DialogComponent<EntityAliasesD
     }).afterClosed().subscribe((entityAlias) => {
       if (entityAlias) {
         if (isAdd) {
-          (this.entityAliasesFormGroup.get('entityAliases') as FormArray)
+          (this.entityAliasesFormGroup.get('entityAliases') as UntypedFormArray)
             .push(this.createEntityAliasFormControl(entityAlias.id, entityAlias));
         } else {
-          const aliasFormControl = (this.entityAliasesFormGroup.get('entityAliases') as FormArray).at(index);
+          const aliasFormControl = (this.entityAliasesFormGroup.get('entityAliases') as UntypedFormArray).at(index);
           aliasFormControl.get('alias').patchValue(entityAlias.alias);
           aliasFormControl.get('filter').patchValue(entityAlias.filter);
           aliasFormControl.get('resolveMultiple').patchValue(entityAlias.filter.resolveMultiple);

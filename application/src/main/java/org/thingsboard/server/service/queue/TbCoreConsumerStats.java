@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@
 package org.thingsboard.server.service.queue;
 
 import lombok.extern.slf4j.Slf4j;
-import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.common.stats.StatsCounter;
 import org.thingsboard.server.common.stats.StatsFactory;
 import org.thingsboard.server.common.stats.StatsType;
+import org.thingsboard.server.gen.transport.TransportProtos;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 public class TbCoreConsumerStats {
@@ -36,6 +37,8 @@ public class TbCoreConsumerStats {
     public static final String DEVICE_STATES = "deviceState";
     public static final String SUBSCRIPTION_MSGS = "subMsgs";
     public static final String TO_CORE_NOTIFICATIONS = "coreNfs";
+    public static final String EDGE_NOTIFICATIONS = "edgeNfs";
+    public static final String DEVICE_ACTIVITIES = "deviceActivity";
 
     private final StatsCounter totalCounter;
     private final StatsCounter sessionEventCounter;
@@ -49,6 +52,8 @@ public class TbCoreConsumerStats {
     private final StatsCounter deviceStateCounter;
     private final StatsCounter subscriptionMsgCounter;
     private final StatsCounter toCoreNotificationsCounter;
+    private final StatsCounter edgeNotificationsCounter;
+    private final StatsCounter deviceActivitiesCounter;
 
     private final List<StatsCounter> counters = new ArrayList<>();
 
@@ -66,6 +71,8 @@ public class TbCoreConsumerStats {
         this.deviceStateCounter = register(statsFactory.createStatsCounter(statsKey, DEVICE_STATES));
         this.subscriptionMsgCounter = register(statsFactory.createStatsCounter(statsKey, SUBSCRIPTION_MSGS));
         this.toCoreNotificationsCounter = register(statsFactory.createStatsCounter(statsKey, TO_CORE_NOTIFICATIONS));
+        this.edgeNotificationsCounter = register(statsFactory.createStatsCounter(statsKey, EDGE_NOTIFICATIONS));
+        this.deviceActivitiesCounter = register(statsFactory.createStatsCounter(statsKey, DEVICE_ACTIVITIES));
     }
 
     private StatsCounter register(StatsCounter counter){
@@ -101,6 +108,16 @@ public class TbCoreConsumerStats {
     public void log(TransportProtos.DeviceStateServiceMsgProto msg) {
         totalCounter.increment();
         deviceStateCounter.increment();
+    }
+
+    public void log(TransportProtos.EdgeNotificationMsgProto msg) {
+        totalCounter.increment();
+        edgeNotificationsCounter.increment();
+    }
+
+    public void log(TransportProtos.DeviceActivityProto msg) {
+        totalCounter.increment();
+        deviceActivitiesCounter.increment();
     }
 
     public void log(TransportProtos.SubscriptionMgrMsgProto msg) {

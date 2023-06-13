@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,7 +15,16 @@
 ///
 
 import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import {
+  ControlValueAccessor,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  ValidationErrors,
+  Validator,
+  Validators
+} from '@angular/forms';
 import {
   EntityKeyValueType,
   FilterPredicateType,
@@ -33,10 +42,15 @@ import {
       provide: NG_VALUE_ACCESSOR,
       useExisting: forwardRef(() => NumericFilterPredicateComponent),
       multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => NumericFilterPredicateComponent),
+      multi: true
     }
   ]
 })
-export class NumericFilterPredicateComponent implements ControlValueAccessor, OnInit {
+export class NumericFilterPredicateComponent implements ControlValueAccessor, Validator, OnInit {
 
   @Input() disabled: boolean;
 
@@ -46,7 +60,7 @@ export class NumericFilterPredicateComponent implements ControlValueAccessor, On
 
   @Input() valueType: EntityKeyValueType;
 
-  numericFilterPredicateFormGroup: FormGroup;
+  numericFilterPredicateFormGroup: UntypedFormGroup;
 
   valueTypeEnum = EntityKeyValueType;
 
@@ -56,7 +70,7 @@ export class NumericFilterPredicateComponent implements ControlValueAccessor, On
 
   private propagateChange = null;
 
-  constructor(private fb: FormBuilder) {
+  constructor(private fb: UntypedFormBuilder) {
   }
 
   ngOnInit(): void {
@@ -76,7 +90,7 @@ export class NumericFilterPredicateComponent implements ControlValueAccessor, On
   registerOnTouched(fn: any): void {
   }
 
-  setDisabledState?(isDisabled: boolean): void {
+  setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (this.disabled) {
       this.numericFilterPredicateFormGroup.disable({emitEvent: false});
@@ -85,17 +99,20 @@ export class NumericFilterPredicateComponent implements ControlValueAccessor, On
     }
   }
 
+  validate(): ValidationErrors | null {
+    return this.numericFilterPredicateFormGroup.valid ? null : {
+      numericFilterPredicate: {valid: false}
+    };
+  }
+
   writeValue(predicate: NumericFilterPredicate): void {
     this.numericFilterPredicateFormGroup.get('operation').patchValue(predicate.operation, {emitEvent: false});
     this.numericFilterPredicateFormGroup.get('value').patchValue(predicate.value, {emitEvent: false});
   }
 
   private updateModel() {
-    let predicate: NumericFilterPredicate = null;
-    if (this.numericFilterPredicateFormGroup.valid) {
-      predicate = this.numericFilterPredicateFormGroup.getRawValue();
-      predicate.type = FilterPredicateType.NUMERIC;
-    }
+    const predicate: NumericFilterPredicate = this.numericFilterPredicateFormGroup.getRawValue();
+    predicate.type = FilterPredicateType.NUMERIC;
     this.propagateChange(predicate);
   }
 

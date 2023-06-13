@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormControl, FormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormControl, UntypedFormGroup, FormGroupDirective, NgForm, Validators } from '@angular/forms';
 import { DeviceService } from '@core/http/device.service';
 import { EntityId } from '@shared/models/id/entity-id';
 import { EntityType } from '@shared/models/entity-type.models';
@@ -28,6 +28,7 @@ import { AssetService } from '@core/http/asset.service';
 import { EntityViewService } from '@core/http/entity-view.service';
 import { DialogComponent } from '@shared/components/dialog.component';
 import { Router } from '@angular/router';
+import { EdgeService } from '@core/http/edge.service';
 
 export interface AssignToCustomerDialogData {
   entityIds: Array<EntityId>;
@@ -43,7 +44,7 @@ export interface AssignToCustomerDialogData {
 export class AssignToCustomerDialogComponent extends
   DialogComponent<AssignToCustomerDialogComponent, boolean> implements OnInit, ErrorStateMatcher {
 
-  assignToCustomerFormGroup: FormGroup;
+  assignToCustomerFormGroup: UntypedFormGroup;
 
   submitted = false;
 
@@ -57,10 +58,11 @@ export class AssignToCustomerDialogComponent extends
               @Inject(MAT_DIALOG_DATA) public data: AssignToCustomerDialogData,
               private deviceService: DeviceService,
               private assetService: AssetService,
+              private edgeService: EdgeService,
               private entityViewService: EntityViewService,
               @SkipSelf() private errorStateMatcher: ErrorStateMatcher,
               public dialogRef: MatDialogRef<AssignToCustomerDialogComponent, boolean>,
-              public fb: FormBuilder) {
+              public fb: UntypedFormBuilder) {
     super(store, router, dialogRef);
   }
 
@@ -77,6 +79,10 @@ export class AssignToCustomerDialogComponent extends
         this.assignToCustomerTitle = 'asset.assign-asset-to-customer';
         this.assignToCustomerText = 'asset.assign-to-customer-text';
         break;
+      case EntityType.EDGE:
+        this.assignToCustomerTitle = 'edge.assign-edge-to-customer';
+        this.assignToCustomerText = 'edge.assign-to-customer-text';
+        break;
       case EntityType.ENTITY_VIEW:
         this.assignToCustomerTitle = 'entity-view.assign-entity-view-to-customer';
         this.assignToCustomerText = 'entity-view.assign-to-customer-text';
@@ -84,7 +90,7 @@ export class AssignToCustomerDialogComponent extends
     }
   }
 
-  isErrorState(control: FormControl | null, form: FormGroupDirective | NgForm | null): boolean {
+  isErrorState(control: UntypedFormControl | null, form: FormGroupDirective | NgForm | null): boolean {
     const originalErrorState = this.errorStateMatcher.isErrorState(control, form);
     const customErrorState = !!(control && control.invalid && this.submitted);
     return originalErrorState || customErrorState;
@@ -116,6 +122,8 @@ export class AssignToCustomerDialogComponent extends
         return this.deviceService.assignDeviceToCustomer(customerId, entityId);
       case EntityType.ASSET:
         return this.assetService.assignAssetToCustomer(customerId, entityId);
+      case EntityType.EDGE:
+        return this.edgeService.assignEdgeToCustomer(customerId, entityId);
       case EntityType.ENTITY_VIEW:
         return this.entityViewService.assignEntityViewToCustomer(customerId, entityId);
     }

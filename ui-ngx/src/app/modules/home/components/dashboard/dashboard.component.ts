@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 import {
   AfterViewInit,
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   DoCheck,
   Input,
@@ -55,11 +57,14 @@ import { SafeStyle } from '@angular/platform-browser';
 import { distinct } from 'rxjs/operators';
 import { ResizeObserver } from '@juggle/resize-observer';
 import { UtilsService } from '@core/services/utils.service';
+import { WidgetComponentAction, WidgetComponentActionType } from '@home/components/widget/widget-container.component';
+import { TbPopoverComponent } from '@shared/components/popover.component';
 
 @Component({
   selector: 'tb-dashboard',
   templateUrl: './dashboard.component.html',
-  styleUrls: ['./dashboard.component.scss']
+  styleUrls: ['./dashboard.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class DashboardComponent extends PageComponent implements IDashboardComponent, DoCheck, OnInit, OnDestroy, AfterViewInit, OnChanges {
 
@@ -85,6 +90,9 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
 
   @Input()
   margin: number;
+
+  @Input()
+  outerMargin: boolean;
 
   @Input()
   isEdit: boolean;
@@ -130,6 +138,12 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
 
   @Input()
   dashboardTimewindow: Timewindow;
+
+  @Input()
+  parentDashboard?: IDashboardComponent = null;
+
+  @Input()
+  popoverComponent?: TbPopoverComponent = null;
 
   dashboardTimewindowChangedSubject: Subject<Timewindow> = new ReplaySubject<Timewindow>();
 
@@ -178,12 +192,15 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
               private breakpointObserver: BreakpointObserver,
               private differs: IterableDiffers,
               private kvDiffers: KeyValueDiffers,
+              private cd: ChangeDetectorRef,
               private ngZone: NgZone) {
     super(store);
     this.authUser = getCurrentAuthUser(store);
   }
 
   ngOnInit(): void {
+    this.dashboardWidgets.parentDashboard = this.parentDashboard;
+    this.dashboardWidgets.popoverComponent = this.popoverComponent;
     if (!this.dashboardTimewindow) {
       this.dashboardTimewindow = this.timeService.defaultTimewindow();
     }
@@ -200,7 +217,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
       maxItemCols: 1000,
       maxItemRows: 1000,
       maxItemArea: 1000000,
-      outerMargin: true,
+      outerMargin: isDefined(this.outerMargin) ? this.outerMargin : true,
       margin: isDefined(this.margin) ? this.margin : 10,
       minItemCols: 1,
       minItemRows: 1,
@@ -235,6 +252,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     if (this.breakpointObserverSubscription) {
       this.breakpointObserverSubscription.unsubscribe();
     }
+    this.dashboardTimewindowChangedSubject.complete();
     this.gridster = null;
   }
 
@@ -249,25 +267,29 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     let updateLayoutOpts = false;
     let updateEditingOpts = false;
     let updateWidgets = false;
+    let updateDashboardTimewindow = false;
     for (const propName of Object.keys(changes)) {
       const change = changes[propName];
       if (!change.firstChange && change.currentValue !== change.previousValue) {
         if (['isMobile', 'isMobileDisabled', 'autofillHeight', 'mobileAutofillHeight', 'mobileRowHeight'].includes(propName)) {
           updateMobileOpts = true;
-        } else if (['margin', 'columns'].includes(propName)) {
+        } else if (['outerMargin', 'margin', 'columns'].includes(propName)) {
           updateLayoutOpts = true;
         } else if (propName === 'isEdit') {
           updateEditingOpts = true;
         } else if (['widgets', 'widgetLayouts'].includes(propName)) {
           updateWidgets = true;
         } else if (propName === 'dashboardTimewindow') {
-          this.dashboardTimewindowChangedSubject.next(this.dashboardTimewindow);
+          updateDashboardTimewindow = true;
         }
       }
     }
     if (updateWidgets) {
       this.updateWidgets();
+    } else if (updateDashboardTimewindow) {
+      this.dashboardTimewindowChangedSubject.next(this.dashboardTimewindow);
     }
+
     if (updateMobileOpts) {
       this.updateMobileOpts();
     }
@@ -342,7 +364,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  openWidgetContextMenu($event: MouseEvent, widget: DashboardWidget) {
+  private openWidgetContextMenu($event: MouseEvent, widget: DashboardWidget) {
     if (this.callbacks && this.callbacks.prepareWidgetContextMenu) {
       const items = this.callbacks.prepareWidgetContextMenu($event, widget.widget);
       if (items && items.length) {
@@ -357,23 +379,47 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  onWidgetFullscreenChanged(expanded: boolean, widget: DashboardWidget) {
+  onWidgetFullscreenChanged(expanded: boolean) {
     this.isWidgetExpanded = expanded;
   }
 
-  widgetMouseDown($event: Event, widget: DashboardWidget) {
+  onWidgetComponentAction(action: WidgetComponentAction, widget: DashboardWidget) {
+    const $event = action.event;
+    switch (action.actionType) {
+      case WidgetComponentActionType.MOUSE_DOWN:
+        this.widgetMouseDown($event, widget);
+        break;
+      case WidgetComponentActionType.CLICKED:
+        this.widgetClicked($event, widget);
+        break;
+      case WidgetComponentActionType.CONTEXT_MENU:
+        this.openWidgetContextMenu($event, widget);
+        break;
+      case WidgetComponentActionType.EDIT:
+        this.editWidget($event, widget);
+        break;
+      case WidgetComponentActionType.EXPORT:
+        this.exportWidget($event, widget);
+        break;
+      case WidgetComponentActionType.REMOVE:
+        this.removeWidget($event, widget);
+        break;
+    }
+  }
+
+  private widgetMouseDown($event: Event, widget: DashboardWidget) {
     if (this.callbacks && this.callbacks.onWidgetMouseDown) {
       this.callbacks.onWidgetMouseDown($event, widget.widget);
     }
   }
 
-  widgetClicked($event: Event, widget: DashboardWidget) {
+  private widgetClicked($event: Event, widget: DashboardWidget) {
     if (this.callbacks && this.callbacks.onWidgetClicked) {
       this.callbacks.onWidgetClicked($event, widget.widget);
     }
   }
 
-  editWidget($event: Event, widget: DashboardWidget) {
+  private editWidget($event: Event, widget: DashboardWidget) {
     if ($event) {
       $event.stopPropagation();
     }
@@ -382,7 +428,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  exportWidget($event: Event, widget: DashboardWidget) {
+  private exportWidget($event: Event, widget: DashboardWidget) {
     if ($event) {
       $event.stopPropagation();
     }
@@ -391,7 +437,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  removeWidget($event: Event, widget: DashboardWidget) {
+  private removeWidget($event: Event, widget: DashboardWidget) {
     if ($event) {
       $event.stopPropagation();
     }
@@ -448,14 +494,6 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     }
   }
 
-  isHighlighted(widget: DashboardWidget) {
-    return this.dashboardWidgets.isHighlighted(widget);
-  }
-
-  isNotHighlighted(widget: DashboardWidget) {
-    return this.dashboardWidgets.isNotHighlighted(widget);
-  }
-
   private scrollToWidget(widget: DashboardWidget, delay?: number) {
     const parentElement = this.gridster.el as HTMLElement;
     widget.gridsterItemComponent$().subscribe((gridsterItem) => {
@@ -475,7 +513,12 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
   }
 
   private updateMobileOpts(parentHeight?: number) {
-    this.isMobileSize = this.checkIsMobileSize();
+    let updateWidgetRowsAndSort = false;
+    const isMobileSize = this.checkIsMobileSize();
+    if (this.isMobileSize !== isMobileSize) {
+      this.isMobileSize = isMobileSize;
+      updateWidgetRowsAndSort = true;
+    }
     const autofillHeight = this.isAutofillHeight();
     if (autofillHeight) {
       this.gridsterOpts.gridType = this.isMobileSize ? GridType.Fixed : GridType.Fit;
@@ -487,6 +530,9 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
     const rowSize = this.detectRowSize(this.isMobileSize, autofillHeight, parentHeight);
     if (this.gridsterOpts.fixedRowHeight !== rowSize) {
       this.gridsterOpts.fixedRowHeight = rowSize;
+    }
+    if (updateWidgetRowsAndSort) {
+      this.dashboardWidgets.updateRowsAndSort();
     }
   }
 
@@ -500,6 +546,7 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
 
   private updateLayoutOpts() {
     this.gridsterOpts.minCols = this.columns ? this.columns : 24;
+    this.gridsterOpts.outerMargin = isDefined(this.outerMargin) ? this.outerMargin : true;
     this.gridsterOpts.margin = isDefined(this.margin) ? this.margin : 10;
   }
 
@@ -540,10 +587,11 @@ export class DashboardComponent extends PageComponent implements IDashboardCompo
       }
       if (parentHeight) {
         let totalRows = 0;
-        for (const widget of this.dashboardWidgets.dashboardWidgets) {
+        for (const widget of this.dashboardWidgets.activeDashboardWidgets) {
           totalRows += widget.rows;
         }
-        rowHeight = (parentHeight - this.gridsterOpts.margin * (this.dashboardWidgets.dashboardWidgets.length + 2)) / totalRows;
+        rowHeight = ( parentHeight - this.gridsterOpts.margin *
+          ( totalRows + (this.gridsterOpts.outerMargin ? 1 : -1) ) ) / totalRows;
       }
     }
     return rowHeight;

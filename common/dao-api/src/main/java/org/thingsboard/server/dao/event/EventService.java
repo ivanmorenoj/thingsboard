@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,31 +16,32 @@
 package org.thingsboard.server.dao.event;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import org.thingsboard.server.common.data.Event;
+import org.thingsboard.server.common.data.EventInfo;
+import org.thingsboard.server.common.data.event.Event;
+import org.thingsboard.server.common.data.event.EventFilter;
+import org.thingsboard.server.common.data.event.EventType;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.TimePageLink;
 
 import java.util.List;
-import java.util.Optional;
 
 public interface EventService {
 
-    Event save(Event event);
+    ListenableFuture<Void> saveAsync(Event event);
 
-    ListenableFuture<Event> saveAsync(Event event);
+    PageData<EventInfo> findEvents(TenantId tenantId, EntityId entityId, EventType eventType, TimePageLink pageLink);
 
-    Optional<Event> saveIfNotExists(Event event);
+    List<EventInfo> findLatestEvents(TenantId tenantId, EntityId entityId, EventType eventType, int limit);
 
-    Optional<Event> findEvent(TenantId tenantId, EntityId entityId, String eventType, String eventUid);
-
-    PageData<Event> findEvents(TenantId tenantId, EntityId entityId, TimePageLink pageLink);
-
-    PageData<Event> findEvents(TenantId tenantId, EntityId entityId, String eventType, TimePageLink pageLink);
-
-    List<Event> findLatestEvents(TenantId tenantId, EntityId entityId, String eventType, int limit);
+    PageData<EventInfo> findEventsByFilter(TenantId tenantId, EntityId entityId, EventFilter eventFilter, TimePageLink pageLink);
 
     void removeEvents(TenantId tenantId, EntityId entityId);
 
+    void removeEvents(TenantId tenantId, EntityId entityId, EventFilter eventFilter, Long startTime, Long endTime);
+
+    void cleanupEvents(long regularEventExpTs, long debugEventExpTs, boolean cleanupDb);
+
+    void migrateEvents();
 }

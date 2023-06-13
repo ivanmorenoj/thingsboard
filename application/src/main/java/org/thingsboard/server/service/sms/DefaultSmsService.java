@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,20 +19,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.NestedRuntimeException;
 import org.springframework.stereotype.Service;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.api.SmsService;
 import org.thingsboard.rule.engine.api.sms.SmsSender;
 import org.thingsboard.rule.engine.api.sms.SmsSenderFactory;
-import org.thingsboard.server.common.data.sms.config.SmsProviderConfiguration;
-import org.thingsboard.server.common.data.sms.config.TestSmsRequest;
 import org.thingsboard.server.common.data.AdminSettings;
 import org.thingsboard.server.common.data.ApiUsageRecordKey;
 import org.thingsboard.server.common.data.exception.ThingsboardErrorCode;
 import org.thingsboard.server.common.data.exception.ThingsboardException;
-import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.sms.config.SmsProviderConfiguration;
+import org.thingsboard.server.common.data.sms.config.TestSmsRequest;
+import org.thingsboard.server.common.stats.TbApiUsageReportClient;
 import org.thingsboard.server.dao.settings.AdminSettingsService;
-import org.thingsboard.server.dao.util.mapping.JacksonUtil;
-import org.thingsboard.server.queue.usagestats.TbApiUsageClient;
 import org.thingsboard.server.service.apiusage.TbApiUsageStateService;
 
 import javax.annotation.PostConstruct;
@@ -45,11 +45,11 @@ public class DefaultSmsService implements SmsService {
     private final SmsSenderFactory smsSenderFactory;
     private final AdminSettingsService adminSettingsService;
     private final TbApiUsageStateService apiUsageStateService;
-    private final TbApiUsageClient apiUsageClient;
+    private final TbApiUsageReportClient apiUsageClient;
 
     private SmsSender smsSender;
 
-    public DefaultSmsService(SmsSenderFactory smsSenderFactory, AdminSettingsService adminSettingsService, TbApiUsageStateService apiUsageStateService, TbApiUsageClient apiUsageClient) {
+    public DefaultSmsService(SmsSenderFactory smsSenderFactory, AdminSettingsService adminSettingsService, TbApiUsageStateService apiUsageStateService, TbApiUsageReportClient apiUsageClient) {
         this.smsSenderFactory = smsSenderFactory;
         this.adminSettingsService = adminSettingsService;
         this.apiUsageStateService = apiUsageStateService;
@@ -70,7 +70,7 @@ public class DefaultSmsService implements SmsService {
 
     @Override
     public void updateSmsConfiguration() {
-        AdminSettings settings = adminSettingsService.findAdminSettingsByKey(new TenantId(EntityId.NULL_UUID), "sms");
+        AdminSettings settings = adminSettingsService.findAdminSettingsByKey(TenantId.SYS_TENANT_ID, "sms");
         if (settings != null) {
             try {
                 JsonNode jsonConfig = settings.getJsonValue();
@@ -94,7 +94,7 @@ public class DefaultSmsService implements SmsService {
     }
 
     @Override
-    public void sendSms(TenantId tenantId, String[] numbersTo, String message) throws ThingsboardException {
+    public void sendSms(TenantId tenantId, CustomerId customerId, String[] numbersTo, String message) throws ThingsboardException {
         if (apiUsageStateService.getApiUsageState(tenantId).isSmsSendEnabled()) {
             int smsCount = 0;
             try {
@@ -103,7 +103,7 @@ public class DefaultSmsService implements SmsService {
                 }
             } finally {
                 if (smsCount > 0) {
-                    apiUsageClient.report(tenantId, ApiUsageRecordKey.SMS_EXEC_COUNT, smsCount);
+                    apiUsageClient.report(tenantId, customerId, ApiUsageRecordKey.SMS_EXEC_COUNT, smsCount);
                 }
             }
         } else {
@@ -121,6 +121,11 @@ public class DefaultSmsService implements SmsService {
         }
         this.sendSms(testSmsSender, testSmsRequest.getNumberTo(), testSmsRequest.getMessage());
         testSmsSender.destroy();
+    }
+
+    @Override
+    public boolean isConfigured(TenantId tenantId) {
+        return smsSender != null;
     }
 
     private int sendSms(SmsSender smsSender, String numberTo, String message) throws ThingsboardException {

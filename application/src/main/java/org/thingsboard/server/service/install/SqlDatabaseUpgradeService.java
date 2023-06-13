@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,36 @@
  */
 package org.thingsboard.server.service.install;
 
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections.CollectionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.thingsboard.server.common.data.EntitySubtype;
 import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
+import org.thingsboard.server.common.data.queue.ProcessingStrategy;
+import org.thingsboard.server.common.data.queue.ProcessingStrategyType;
+import org.thingsboard.server.common.data.queue.Queue;
+import org.thingsboard.server.common.data.queue.SubmitStrategy;
+import org.thingsboard.server.common.data.queue.SubmitStrategyType;
+import org.thingsboard.server.common.data.util.TbPair;
+import org.thingsboard.server.dao.asset.AssetDao;
+import org.thingsboard.server.dao.asset.AssetProfileService;
 import org.thingsboard.server.dao.dashboard.DashboardService;
 import org.thingsboard.server.dao.device.DeviceProfileService;
 import org.thingsboard.server.dao.device.DeviceService;
+import org.thingsboard.server.dao.queue.QueueService;
+import org.thingsboard.server.dao.sql.tenant.TenantRepository;
 import org.thingsboard.server.dao.tenant.TenantService;
 import org.thingsboard.server.dao.usagerecord.ApiUsageStateService;
+import org.thingsboard.server.queue.settings.TbRuleEngineQueueConfiguration;
 import org.thingsboard.server.service.install.sql.SqlDbHelper;
 
 import java.nio.charset.Charset;
@@ -42,7 +58,10 @@ import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.thingsboard.server.service.install.DatabaseHelper.ADDITIONAL_INFO;
 import static org.thingsboard.server.service.install.DatabaseHelper.ASSIGNED_CUSTOMERS;
@@ -92,14 +111,32 @@ public class SqlDatabaseUpgradeService implements DatabaseEntitiesUpgradeService
     private TenantService tenantService;
 
     @Autowired
+    private TenantRepository tenantRepository;
+
+    @Autowired
     private DeviceService deviceService;
+
+    @Autowired
+    private AssetDao assetDao;
 
     @Autowired
     private DeviceProfileService deviceProfileService;
 
     @Autowired
+    private AssetProfileService assetProfileService;
+
+    @Autowired
     private ApiUsageStateService apiUsageStateService;
 
+    @Lazy
+    @Autowired
+    private QueueService queueService;
+
+    @Autowired
+    private TbRuleEngineQueueConfigService queueConfig;
+
+    @Autowired
+    private DbUpgradeExecutorService dbUpgradeExecutor;
 
     @Override
     public void upgradeDatabase(String fromVersion) throws Exception {
@@ -390,7 +427,7 @@ public class SqlDatabaseUpgradeService implements DatabaseEntitiesUpgradeService
                             pageData = tenantService.findTenants(pageLink);
                             for (Tenant tenant : pageData.getData()) {
                                 try {
-                                    apiUsageStateService.createDefaultApiUsageState(tenant.getId());
+                                    apiUsageStateService.createDefaultApiUsageState(tenant.getId(), null);
                                 } catch (Exception e) {
                                 }
                                 List<EntitySubtype> deviceTypes = deviceService.findDeviceTypesByTenantId(tenant.getId()).get();
@@ -446,15 +483,278 @@ public class SqlDatabaseUpgradeService implements DatabaseEntitiesUpgradeService
                     log.error("Failed updating schema!!!", e);
                 }
                 break;
+            case "3.2.2":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    try {
+                        conn.createStatement().execute("ALTER TABLE rule_chain ADD COLUMN type varchar(255) DEFAULT 'CORE'"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                    } catch (Exception ignored) {
+                    }
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.2.2", SCHEMA_UPDATE_SQL);
+                    loadSql(schemaUpdateFile, conn);
+                    log.info("Load Edge TTL functions ...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.2.2", "schema_update_ttl.sql");
+                    loadSql(schemaUpdateFile, conn);
+                    log.info("Edge TTL functions successfully loaded!");
+                    log.info("Updating indexes and TTL procedure for event table...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.2.2", "schema_update_event.sql");
+                    loadSql(schemaUpdateFile, conn);
+                    log.info("Updating schema settings...");
+                    conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3003000;");
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.3.2":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.3.2", SCHEMA_UPDATE_SQL);
+                    loadSql(schemaUpdateFile, conn);
+                    try {
+                        conn.createStatement().execute("ALTER TABLE alarm ADD COLUMN propagate_to_owner boolean DEFAULT false;"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        conn.createStatement().execute("ALTER TABLE alarm ADD COLUMN propagate_to_tenant boolean DEFAULT false;"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                    } catch (Exception ignored) {
+                    }
+
+                    try {
+                        conn.createStatement().execute("insert into entity_alarm(tenant_id, entity_id, created_time, alarm_type, customer_id, alarm_id)" +
+                                " select tenant_id, originator_id, created_time, type, customer_id, id from alarm ON CONFLICT DO NOTHING;");
+                        conn.createStatement().execute("insert into entity_alarm(tenant_id, entity_id, created_time, alarm_type, customer_id, alarm_id)" +
+                                " select a.tenant_id, r.from_id, created_time, type, customer_id, id" +
+                                " from alarm a inner join relation r on r.relation_type_group = 'ALARM' and r.relation_type = 'ANY' and a.id = r.to_id ON CONFLICT DO NOTHING;");
+                        conn.createStatement().execute("delete from relation r where r.relation_type_group = 'ALARM';");
+                    } catch (Exception e) {
+                        log.error("Failed to update alarm relations!!!", e);
+                    }
+
+                    log.info("Updating lwm2m device profiles ...");
+                    try {
+                        schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.3.2", "schema_update_lwm2m_bootstrap.sql");
+                        loadSql(schemaUpdateFile, conn);
+                        log.info("Updating server`s public key from HexDec to Base64 in profile for LWM2M...");
+                        conn.createStatement().execute("call update_profile_bootstrap();");
+                        log.info("Server`s public key from HexDec to Base64 in profile for LWM2M updated.");
+                        log.info("Updating client`s public key and secret key from HexDec to Base64 for LWM2M...");
+                        conn.createStatement().execute("call update_device_credentials_to_base64_and_bootstrap();");
+                        log.info("Client`s public key and secret key from HexDec to Base64 for LWM2M updated.");
+                    } catch (Exception e) {
+                        log.error("Failed to update lwm2m profiles!!!", e);
+                    }
+                    log.info("Updating schema settings...");
+                    conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3003003;");
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.3.3":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    try {
+                        conn.createStatement().execute("ALTER TABLE edge DROP COLUMN edge_license_key;"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        conn.createStatement().execute("ALTER TABLE edge DROP COLUMN cloud_endpoint;"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                    } catch (Exception ignored) {
+                    }
+
+                    log.info("Updating TTL cleanup procedure for the event table...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.3.3", "schema_event_ttl_procedure.sql");
+                    loadSql(schemaUpdateFile, conn);
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.3.3", SCHEMA_UPDATE_SQL);
+                    loadSql(schemaUpdateFile, conn);
+
+                    log.info("Updating schema settings...");
+                    conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3003004;");
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.3.4":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.3.4", SCHEMA_UPDATE_SQL);
+                    loadSql(schemaUpdateFile, conn);
+
+                    log.info("Loading queues...");
+                    try {
+                        if (!CollectionUtils.isEmpty(queueConfig.getQueues())) {
+                            queueConfig.getQueues().forEach(queueSettings -> {
+                                Queue queue = queueConfigToQueue(queueSettings);
+                                Queue existing = queueService.findQueueByTenantIdAndName(queue.getTenantId(), queue.getName());
+                                if (existing == null) {
+                                    queueService.saveQueue(queue);
+                                }
+                            });
+                        } else {
+                            systemDataLoaderService.createQueues();
+                        }
+                    } catch (Exception e) {
+                    }
+
+                    log.info("Updating schema settings...");
+                    conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3004000;");
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.4.0":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.4.0", SCHEMA_UPDATE_SQL);
+                    loadSql(schemaUpdateFile, conn);
+                    log.info("Updating schema settings...");
+                    conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3004001;");
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.4.1":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    runSchemaUpdateScript(conn, "3.4.1");
+                    if (isOldSchema(conn, 3004001)) {
+                        try {
+                            conn.createStatement().execute("ALTER TABLE asset ADD COLUMN asset_profile_id uuid");
+                        } catch (Exception e) {
+                        }
+
+                        schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.4.1", "schema_update_before.sql");
+                        loadSql(schemaUpdateFile, conn);
+
+                        conn.createStatement().execute("DELETE FROM asset a WHERE NOT exists(SELECT id FROM tenant WHERE id = a.tenant_id);");
+
+                        log.info("Creating default asset profiles...");
+
+                        PageLink pageLink = new PageLink(1000);
+                        PageData<TenantId> tenantIds;
+                        do {
+                            List<ListenableFuture<?>> futures = new ArrayList<>();
+                            tenantIds = tenantService.findTenantsIds(pageLink);
+                            for (TenantId tenantId : tenantIds.getData()) {
+                                futures.add(dbUpgradeExecutor.submit(() -> {
+                                    try {
+                                        assetProfileService.createDefaultAssetProfile(tenantId);
+                                    } catch (Exception e) {}
+                                }));
+                            }
+                            Futures.allAsList(futures).get();
+                            pageLink = pageLink.nextPageLink();
+                        } while (tenantIds.hasNext());
+
+                        pageLink = new PageLink(1000);
+                        PageData<TbPair<UUID, String>> pairs;
+                        do {
+                            List<ListenableFuture<?>> futures = new ArrayList<>();
+                            pairs = assetDao.getAllAssetTypes(pageLink);
+                            for (TbPair<UUID, String> pair : pairs.getData()) {
+                                TenantId tenantId = new TenantId(pair.getFirst());
+                                String assetType = pair.getSecond();
+                                if (!"default".equals(assetType)) {
+                                    futures.add(dbUpgradeExecutor.submit(() -> {
+                                        try {
+                                            assetProfileService.findOrCreateAssetProfile(tenantId, assetType);
+                                        } catch (Exception e) {}
+                                    }));
+                                }
+                            }
+                            Futures.allAsList(futures).get();
+                            pageLink = pageLink.nextPageLink();
+                        } while (pairs.hasNext());
+
+                        log.info("Updating asset profiles...");
+                        conn.createStatement().execute("call update_asset_profiles()");
+
+                        schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.4.1", "schema_update_after.sql");
+                        loadSql(schemaUpdateFile, conn);
+
+                        conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3004002;");
+                    }
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.4.4":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    if (isOldSchema(conn, 3004002)) {
+                        schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.4.4", SCHEMA_UPDATE_SQL);
+                        loadSql(schemaUpdateFile, conn);
+
+                        try {
+                            conn.createStatement().execute("VACUUM FULL ANALYZE alarm;"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        } catch (Exception e) {
+                        }
+
+                        try {
+                            conn.createStatement().execute("ALTER TABLE asset_profile ADD COLUMN default_edge_rule_chain_id uuid"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        } catch (Exception e) {
+                        }
+                        try {
+                            conn.createStatement().execute("ALTER TABLE device_profile ADD COLUMN default_edge_rule_chain_id uuid"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        } catch (Exception e) {
+                        }
+                        try {
+                            conn.createStatement().execute("ALTER TABLE asset_profile ADD CONSTRAINT fk_default_edge_rule_chain_asset_profile FOREIGN KEY (default_edge_rule_chain_id) REFERENCES rule_chain(id)"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        } catch (Exception e) {
+                        }
+                        try {
+                            conn.createStatement().execute("ALTER TABLE device_profile ADD CONSTRAINT fk_default_edge_rule_chain_device_profile FOREIGN KEY (default_edge_rule_chain_id) REFERENCES rule_chain(id)"); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+                        } catch (Exception e) {
+                        }
+
+                        conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3005000;");
+                    }
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
+            case "3.5.0":
+                try (Connection conn = DriverManager.getConnection(dbUrl, dbUserName, dbPassword)) {
+                    log.info("Updating schema ...");
+                    if (isOldSchema(conn, 3005000)) {
+                        schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", "3.5.0", SCHEMA_UPDATE_SQL);
+                        loadSql(schemaUpdateFile, conn);
+                        conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3005001;");
+                    }
+                    log.info("Schema updated.");
+                } catch (Exception e) {
+                    log.error("Failed updating schema!!!", e);
+                }
+                break;
             default:
                 throw new RuntimeException("Unable to upgrade SQL database, unsupported fromVersion: " + fromVersion);
         }
     }
 
+    private void runSchemaUpdateScript(Connection connection, String version) throws Exception {
+        Path schemaUpdateFile = Paths.get(installScripts.getDataDir(), "upgrade", version, SCHEMA_UPDATE_SQL);
+        loadSql(schemaUpdateFile, connection);
+    }
+
     private void loadSql(Path sqlFile, Connection conn) throws Exception {
         String sql = new String(Files.readAllBytes(sqlFile), Charset.forName("UTF-8"));
-        conn.createStatement().execute(sql); //NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+        Statement st = conn.createStatement();
+        st.setQueryTimeout((int) TimeUnit.HOURS.toSeconds(3));
+        st.execute(sql);//NOSONAR, ignoring because method used to execute thingsboard database upgrade script
+        printWarnings(st);
         Thread.sleep(5000);
+    }
+
+    protected void printWarnings(Statement statement) throws SQLException {
+        SQLWarning warnings = statement.getWarnings();
+        if (warnings != null) {
+            log.info("{}", warnings.getMessage());
+            SQLWarning nextWarning = warnings.getNextWarning();
+            while (nextWarning != null) {
+                log.info("{}", nextWarning.getMessage());
+                nextWarning = nextWarning.getNextWarning();
+            }
+        }
     }
 
     protected boolean isOldSchema(Connection conn, long fromVersion) {
@@ -476,4 +776,28 @@ public class SqlDatabaseUpgradeService implements DatabaseEntitiesUpgradeService
         }
         return isOldSchema;
     }
+
+    private Queue queueConfigToQueue(TbRuleEngineQueueConfiguration queueSettings) {
+        Queue queue = new Queue();
+        queue.setTenantId(TenantId.SYS_TENANT_ID);
+        queue.setName(queueSettings.getName());
+        queue.setTopic(queueSettings.getTopic());
+        queue.setPollInterval(queueSettings.getPollInterval());
+        queue.setPartitions(queueSettings.getPartitions());
+        queue.setPackProcessingTimeout(queueSettings.getPackProcessingTimeout());
+        SubmitStrategy submitStrategy = new SubmitStrategy();
+        submitStrategy.setBatchSize(queueSettings.getSubmitStrategy().getBatchSize());
+        submitStrategy.setType(SubmitStrategyType.valueOf(queueSettings.getSubmitStrategy().getType()));
+        queue.setSubmitStrategy(submitStrategy);
+        ProcessingStrategy processingStrategy = new ProcessingStrategy();
+        processingStrategy.setType(ProcessingStrategyType.valueOf(queueSettings.getProcessingStrategy().getType()));
+        processingStrategy.setRetries(queueSettings.getProcessingStrategy().getRetries());
+        processingStrategy.setFailurePercentage(queueSettings.getProcessingStrategy().getFailurePercentage());
+        processingStrategy.setPauseBetweenRetries(queueSettings.getProcessingStrategy().getPauseBetweenRetries());
+        processingStrategy.setMaxPauseBetweenRetries(queueSettings.getProcessingStrategy().getMaxPauseBetweenRetries());
+        queue.setProcessingStrategy(processingStrategy);
+        queue.setConsumerPerPartition(queueSettings.isConsumerPerPartition());
+        return queue;
+    }
+
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,10 @@ import com.google.protobuf.util.JsonFormat;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.queue.Queue;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.gen.js.JsInvokeProtos;
+import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.gen.transport.TransportProtos.ToCoreMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToCoreNotificationMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToRuleEngineMsg;
@@ -34,7 +36,7 @@ import org.thingsboard.server.queue.TbQueueRequestTemplate;
 import org.thingsboard.server.queue.common.DefaultTbQueueRequestTemplate;
 import org.thingsboard.server.queue.common.TbProtoJsQueueMsg;
 import org.thingsboard.server.queue.common.TbProtoQueueMsg;
-import org.thingsboard.server.queue.discovery.PartitionService;
+import org.thingsboard.server.queue.discovery.NotificationsTopicService;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
 import org.thingsboard.server.queue.kafka.TbKafkaAdmin;
 import org.thingsboard.server.queue.kafka.TbKafkaConsumerStatsService;
@@ -45,47 +47,56 @@ import org.thingsboard.server.queue.kafka.TbKafkaTopicConfigs;
 import org.thingsboard.server.queue.settings.TbQueueCoreSettings;
 import org.thingsboard.server.queue.settings.TbQueueRemoteJsInvokeSettings;
 import org.thingsboard.server.queue.settings.TbQueueRuleEngineSettings;
-import org.thingsboard.server.queue.settings.TbRuleEngineQueueConfiguration;
+import org.thingsboard.server.queue.settings.TbQueueTransportNotificationSettings;
 
 import javax.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @ConditionalOnExpression("'${queue.type:null}'=='kafka' && '${service.type:null}'=='tb-rule-engine'")
 public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
 
-    private final PartitionService partitionService;
+    private final NotificationsTopicService notificationsTopicService;
     private final TbKafkaSettings kafkaSettings;
     private final TbServiceInfoProvider serviceInfoProvider;
     private final TbQueueCoreSettings coreSettings;
     private final TbQueueRuleEngineSettings ruleEngineSettings;
     private final TbQueueRemoteJsInvokeSettings jsInvokeSettings;
     private final TbKafkaConsumerStatsService consumerStatsService;
+    private final TbQueueTransportNotificationSettings transportNotificationSettings;
 
     private final TbQueueAdmin coreAdmin;
     private final TbQueueAdmin ruleEngineAdmin;
-    private final TbQueueAdmin jsExecutorAdmin;
+    private final TbQueueAdmin jsExecutorRequestAdmin;
+    private final TbQueueAdmin jsExecutorResponseAdmin;
     private final TbQueueAdmin notificationAdmin;
+    private final TbQueueAdmin fwUpdatesAdmin;
+    private final AtomicLong consumerCount = new AtomicLong();
 
-    public KafkaTbRuleEngineQueueFactory(PartitionService partitionService, TbKafkaSettings kafkaSettings,
+    public KafkaTbRuleEngineQueueFactory(NotificationsTopicService notificationsTopicService, TbKafkaSettings kafkaSettings,
                                          TbServiceInfoProvider serviceInfoProvider,
                                          TbQueueCoreSettings coreSettings,
                                          TbQueueRuleEngineSettings ruleEngineSettings,
                                          TbQueueRemoteJsInvokeSettings jsInvokeSettings,
                                          TbKafkaConsumerStatsService consumerStatsService,
+                                         TbQueueTransportNotificationSettings transportNotificationSettings,
                                          TbKafkaTopicConfigs kafkaTopicConfigs) {
-        this.partitionService = partitionService;
+        this.notificationsTopicService = notificationsTopicService;
         this.kafkaSettings = kafkaSettings;
         this.serviceInfoProvider = serviceInfoProvider;
         this.coreSettings = coreSettings;
         this.ruleEngineSettings = ruleEngineSettings;
         this.jsInvokeSettings = jsInvokeSettings;
         this.consumerStatsService = consumerStatsService;
+        this.transportNotificationSettings = transportNotificationSettings;
 
         this.coreAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getCoreConfigs());
         this.ruleEngineAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getRuleEngineConfigs());
-        this.jsExecutorAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getJsExecutorConfigs());
+        this.jsExecutorRequestAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getJsExecutorRequestConfigs());
+        this.jsExecutorResponseAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getJsExecutorResponseConfigs());
         this.notificationAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getNotificationsConfigs());
+        this.fwUpdatesAdmin = new TbKafkaAdmin(kafkaSettings, kafkaTopicConfigs.getFwUpdatesConfigs());
     }
 
     @Override
@@ -93,8 +104,8 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
         TbKafkaProducerTemplate.TbKafkaProducerTemplateBuilder<TbProtoQueueMsg<ToTransportMsg>> requestBuilder = TbKafkaProducerTemplate.builder();
         requestBuilder.settings(kafkaSettings);
         requestBuilder.clientId("tb-rule-engine-transport-notifications-" + serviceInfoProvider.getServiceId());
-        requestBuilder.defaultTopic(coreSettings.getTopic());
-        requestBuilder.admin(coreAdmin);
+        requestBuilder.defaultTopic(transportNotificationSettings.getNotificationsTopic());
+        requestBuilder.admin(notificationAdmin);
         return requestBuilder.build();
     }
 
@@ -103,8 +114,8 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
         TbKafkaProducerTemplate.TbKafkaProducerTemplateBuilder<TbProtoQueueMsg<ToRuleEngineMsg>> requestBuilder = TbKafkaProducerTemplate.builder();
         requestBuilder.settings(kafkaSettings);
         requestBuilder.clientId("tb-rule-engine-to-rule-engine-" + serviceInfoProvider.getServiceId());
-        requestBuilder.defaultTopic(coreSettings.getTopic());
-        requestBuilder.admin(coreAdmin);
+        requestBuilder.defaultTopic(ruleEngineSettings.getTopic());
+        requestBuilder.admin(ruleEngineAdmin);
         return requestBuilder.build();
     }
 
@@ -114,10 +125,9 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
         requestBuilder.settings(kafkaSettings);
         requestBuilder.clientId("tb-rule-engine-to-rule-engine-notifications-" + serviceInfoProvider.getServiceId());
         requestBuilder.defaultTopic(ruleEngineSettings.getTopic());
-        requestBuilder.admin(ruleEngineAdmin);
+        requestBuilder.admin(notificationAdmin);
         return requestBuilder.build();
     }
-
 
     @Override
     public TbQueueProducer<TbProtoQueueMsg<ToCoreMsg>> createTbCoreMsgProducer() {
@@ -130,22 +140,32 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
     }
 
     @Override
+    public TbQueueProducer<TbProtoQueueMsg<TransportProtos.ToOtaPackageStateServiceMsg>> createToOtaPackageStateServiceMsgProducer() {
+        TbKafkaProducerTemplate.TbKafkaProducerTemplateBuilder<TbProtoQueueMsg<TransportProtos.ToOtaPackageStateServiceMsg>> requestBuilder = TbKafkaProducerTemplate.builder();
+        requestBuilder.settings(kafkaSettings);
+        requestBuilder.clientId("tb-rule-engine-ota-producer-" + serviceInfoProvider.getServiceId());
+        requestBuilder.defaultTopic(coreSettings.getOtaPackageTopic());
+        requestBuilder.admin(fwUpdatesAdmin);
+        return requestBuilder.build();
+    }
+
+    @Override
     public TbQueueProducer<TbProtoQueueMsg<ToCoreNotificationMsg>> createTbCoreNotificationsMsgProducer() {
         TbKafkaProducerTemplate.TbKafkaProducerTemplateBuilder<TbProtoQueueMsg<ToCoreNotificationMsg>> requestBuilder = TbKafkaProducerTemplate.builder();
         requestBuilder.settings(kafkaSettings);
         requestBuilder.clientId("tb-rule-engine-to-core-notifications-" + serviceInfoProvider.getServiceId());
         requestBuilder.defaultTopic(coreSettings.getTopic());
-        requestBuilder.admin(coreAdmin);
+        requestBuilder.admin(notificationAdmin);
         return requestBuilder.build();
     }
 
     @Override
-    public TbQueueConsumer<TbProtoQueueMsg<ToRuleEngineMsg>> createToRuleEngineMsgConsumer(TbRuleEngineQueueConfiguration configuration) {
+    public TbQueueConsumer<TbProtoQueueMsg<ToRuleEngineMsg>> createToRuleEngineMsgConsumer(Queue configuration) {
         String queueName = configuration.getName();
         TbKafkaConsumerTemplate.TbKafkaConsumerTemplateBuilder<TbProtoQueueMsg<ToRuleEngineMsg>> consumerBuilder = TbKafkaConsumerTemplate.builder();
         consumerBuilder.settings(kafkaSettings);
-        consumerBuilder.topic(ruleEngineSettings.getTopic());
-        consumerBuilder.clientId("re-" + queueName + "-consumer-" + serviceInfoProvider.getServiceId());
+        consumerBuilder.topic(configuration.getTopic());
+        consumerBuilder.clientId("re-" + queueName + "-consumer-" + serviceInfoProvider.getServiceId() + "-" + consumerCount.incrementAndGet());
         consumerBuilder.groupId("re-" + queueName + "-consumer");
         consumerBuilder.decoder(msg -> new TbProtoQueueMsg<>(msg.getKey(), ToRuleEngineMsg.parseFrom(msg.getData()), msg.getHeaders()));
         consumerBuilder.admin(ruleEngineAdmin);
@@ -157,7 +177,7 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
     public TbQueueConsumer<TbProtoQueueMsg<ToRuleEngineNotificationMsg>> createToRuleEngineNotificationsMsgConsumer() {
         TbKafkaConsumerTemplate.TbKafkaConsumerTemplateBuilder<TbProtoQueueMsg<ToRuleEngineNotificationMsg>> consumerBuilder = TbKafkaConsumerTemplate.builder();
         consumerBuilder.settings(kafkaSettings);
-        consumerBuilder.topic(partitionService.getNotificationsTopic(ServiceType.TB_RULE_ENGINE, serviceInfoProvider.getServiceId()).getFullTopicName());
+        consumerBuilder.topic(notificationsTopicService.getNotificationsTopic(ServiceType.TB_RULE_ENGINE, serviceInfoProvider.getServiceId()).getFullTopicName());
         consumerBuilder.clientId("tb-rule-engine-notifications-consumer-" + serviceInfoProvider.getServiceId());
         consumerBuilder.groupId("tb-rule-engine-notifications-node-" + serviceInfoProvider.getServiceId());
         consumerBuilder.decoder(msg -> new TbProtoQueueMsg<>(msg.getKey(), ToRuleEngineNotificationMsg.parseFrom(msg.getData()), msg.getHeaders()));
@@ -173,7 +193,7 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
         requestBuilder.settings(kafkaSettings);
         requestBuilder.clientId("producer-js-invoke-" + serviceInfoProvider.getServiceId());
         requestBuilder.defaultTopic(jsInvokeSettings.getRequestTopic());
-        requestBuilder.admin(jsExecutorAdmin);
+        requestBuilder.admin(jsExecutorRequestAdmin);
 
         TbKafkaConsumerTemplate.TbKafkaConsumerTemplateBuilder<TbProtoQueueMsg<JsInvokeProtos.RemoteJsResponse>> responseBuilder = TbKafkaConsumerTemplate.builder();
         responseBuilder.settings(kafkaSettings);
@@ -186,12 +206,12 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
                     return new TbProtoQueueMsg<>(msg.getKey(), builder.build(), msg.getHeaders());
                 }
         );
-        responseBuilder.admin(jsExecutorAdmin);
+        responseBuilder.admin(jsExecutorResponseAdmin);
         responseBuilder.statsService(consumerStatsService);
 
         DefaultTbQueueRequestTemplate.DefaultTbQueueRequestTemplateBuilder
                 <TbProtoJsQueueMsg<JsInvokeProtos.RemoteJsRequest>, TbProtoQueueMsg<JsInvokeProtos.RemoteJsResponse>> builder = DefaultTbQueueRequestTemplate.builder();
-        builder.queueAdmin(jsExecutorAdmin);
+        builder.queueAdmin(jsExecutorResponseAdmin);
         builder.requestTemplate(requestBuilder.build());
         builder.responseTemplate(responseBuilder.build());
         builder.maxPendingRequests(jsInvokeSettings.getMaxPendingRequests());
@@ -218,11 +238,17 @@ public class KafkaTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
         if (ruleEngineAdmin != null) {
             ruleEngineAdmin.destroy();
         }
-        if (jsExecutorAdmin != null) {
-            jsExecutorAdmin.destroy();
+        if (jsExecutorRequestAdmin != null) {
+            jsExecutorRequestAdmin.destroy();
+        }
+        if (jsExecutorResponseAdmin != null) {
+            jsExecutorResponseAdmin.destroy();
         }
         if (notificationAdmin != null) {
             notificationAdmin.destroy();
+        }
+        if (fwUpdatesAdmin != null) {
+            fwUpdatesAdmin.destroy();
         }
     }
 }

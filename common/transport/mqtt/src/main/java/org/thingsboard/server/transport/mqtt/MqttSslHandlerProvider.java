@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,24 @@
  */
 package org.thingsboard.server.transport.mqtt;
 
-import com.google.common.io.Resources;
 import io.netty.handler.ssl.SslHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.DeviceTransportType;
-import org.thingsboard.server.common.msg.EncryptionUtil;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.transport.TransportService;
 import org.thingsboard.server.common.transport.TransportServiceCallback;
 import org.thingsboard.server.common.transport.auth.ValidateDeviceCredentialsResponse;
+import org.thingsboard.server.common.transport.config.ssl.SslCredentials;
+import org.thingsboard.server.common.transport.config.ssl.SslCredentialsConfig;
+import org.thingsboard.server.common.transport.util.SslUtil;
 import org.thingsboard.server.gen.transport.TransportProtos;
-import org.thingsboard.server.transport.mqtt.util.SslUtil;
 
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
@@ -39,13 +41,6 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.security.KeyStore;
-import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.CountDownLatch;
@@ -56,44 +51,46 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component("MqttSslHandlerProvider")
-@ConditionalOnExpression("'${transport.type:null}'=='null' || ('${transport.type}'=='local' && '${transport.mqtt.enabled}'=='true')")
 @ConditionalOnProperty(prefix = "transport.mqtt.ssl", value = "enabled", havingValue = "true", matchIfMissing = false)
 public class MqttSslHandlerProvider {
 
     @Value("${transport.mqtt.ssl.protocol}")
     private String sslProtocol;
-    @Value("${transport.mqtt.ssl.key_store}")
-    private String keyStoreFile;
-    @Value("${transport.mqtt.ssl.key_store_password}")
-    private String keyStorePassword;
-    @Value("${transport.mqtt.ssl.key_password}")
-    private String keyPassword;
-    @Value("${transport.mqtt.ssl.key_store_type}")
-    private String keyStoreType;
 
     @Autowired
     private TransportService transportService;
 
+    @Bean
+    @ConfigurationProperties(prefix = "transport.mqtt.ssl.credentials")
+    public SslCredentialsConfig mqttSslCredentials() {
+        return new SslCredentialsConfig("MQTT SSL Credentials", false);
+    }
+
+    @Autowired
+    @Qualifier("mqttSslCredentials")
+    private SslCredentialsConfig mqttSslCredentialsConfig;
+
+    private SSLContext sslContext;
+
     public SslHandler getSslHandler() {
+        if (sslContext == null) {
+            sslContext = createSslContext();
+        }
+        SSLEngine sslEngine = sslContext.createSSLEngine();
+        sslEngine.setUseClientMode(false);
+        sslEngine.setNeedClientAuth(false);
+        sslEngine.setWantClientAuth(true);
+        sslEngine.setEnabledProtocols(sslEngine.getSupportedProtocols());
+        sslEngine.setEnabledCipherSuites(sslEngine.getSupportedCipherSuites());
+        sslEngine.setEnableSessionCreation(true);
+        return new SslHandler(sslEngine);
+    }
+
+    private SSLContext createSslContext() {
         try {
-            URL ksUrl = Resources.getResource(keyStoreFile);
-            File ksFile = new File(ksUrl.toURI());
-            URL tsUrl = Resources.getResource(keyStoreFile);
-            File tsFile = new File(tsUrl.toURI());
-
-            TrustManagerFactory tmFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            KeyStore trustStore = KeyStore.getInstance(keyStoreType);
-            try (InputStream tsFileInputStream = new FileInputStream(tsFile)) {
-                trustStore.load(tsFileInputStream, keyStorePassword.toCharArray());
-            }
-            tmFactory.init(trustStore);
-
-            KeyStore ks = KeyStore.getInstance(keyStoreType);
-            try (InputStream ksFileInputStream = new FileInputStream(ksFile)) {
-                ks.load(ksFileInputStream, keyStorePassword.toCharArray());
-            }
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            kmf.init(ks, keyPassword.toCharArray());
+            SslCredentials sslCredentials = this.mqttSslCredentialsConfig.getCredentials();
+            TrustManagerFactory tmFactory = sslCredentials.createTrustManagerFactory();
+            KeyManagerFactory kmf = sslCredentials.createKeyManagerFactory();
 
             KeyManager[] km = kmf.getKeyManagers();
             TrustManager x509wrapped = getX509TrustManager(tmFactory);
@@ -103,17 +100,10 @@ public class MqttSslHandlerProvider {
             }
             SSLContext sslContext = SSLContext.getInstance(sslProtocol);
             sslContext.init(km, tm, null);
-            SSLEngine sslEngine = sslContext.createSSLEngine();
-            sslEngine.setUseClientMode(false);
-            sslEngine.setNeedClientAuth(false);
-            sslEngine.setWantClientAuth(true);
-            sslEngine.setEnabledProtocols(sslEngine.getSupportedProtocols());
-            sslEngine.setEnabledCipherSuites(sslEngine.getSupportedCipherSuites());
-            sslEngine.setEnableSessionCreation(true);
-            return new SslHandler(sslEngine);
+            return sslContext;
         } catch (Exception e) {
             log.error("Unable to set up SSL context. Reason: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to get SSL handler", e);
+            throw new RuntimeException("Failed to get SSL context", e);
         }
     }
 
@@ -131,7 +121,7 @@ public class MqttSslHandlerProvider {
     static class ThingsboardMqttX509TrustManager implements X509TrustManager {
 
         private final X509TrustManager trustManager;
-        private TransportService transportService;
+        private final TransportService transportService;
 
         ThingsboardMqttX509TrustManager(X509TrustManager trustManager, TransportService transportService) {
             this.trustManager = trustManager;
@@ -150,42 +140,59 @@ public class MqttSslHandlerProvider {
         }
 
         @Override
-        public void checkClientTrusted(X509Certificate[] chain,
-                                       String authType) throws CertificateException {
-            String credentialsBody = null;
-            for (X509Certificate cert : chain) {
-                try {
-                    String strCert = SslUtil.getCertificateString(cert);
-                    String sha3Hash = EncryptionUtil.getSha3Hash(strCert);
-                    final String[] credentialsBodyHolder = new String[1];
-                    CountDownLatch latch = new CountDownLatch(1);
-                    transportService.process(DeviceTransportType.MQTT, TransportProtos.ValidateDeviceX509CertRequestMsg.newBuilder().setHash(sha3Hash).build(),
-                            new TransportServiceCallback<ValidateDeviceCredentialsResponse>() {
-                                @Override
-                                public void onSuccess(ValidateDeviceCredentialsResponse msg) {
-                                    if (!StringUtils.isEmpty(msg.getCredentials())) {
-                                        credentialsBodyHolder[0] = msg.getCredentials();
-                                    }
-                                    latch.countDown();
-                                }
-
-                                @Override
-                                public void onError(Throwable e) {
-                                    log.error(e.getMessage(), e);
-                                    latch.countDown();
-                                }
-                            });
-                    latch.await(10, TimeUnit.SECONDS);
-                    if (strCert.equals(credentialsBodyHolder[0])) {
-                        credentialsBody = credentialsBodyHolder[0];
-                        break;
-                    }
-                } catch (InterruptedException | CertificateEncodingException e) {
-                    log.error(e.getMessage(), e);
-                }
+        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            if (!validateCertificateChain(chain)) {
+                throw new CertificateException("Invalid Chain of X509 Certificates. ");
             }
-            if (credentialsBody == null) {
-                throw new CertificateException("Invalid Device Certificate");
+            String clientDeviceCertValue = SslUtil.getCertificateString(chain[0]);
+            final String[] credentialsBodyHolder = new String[1];
+            CountDownLatch latch = new CountDownLatch(1);
+            try {
+                String certificateChain = SslUtil.getCertificateChainString(chain);
+                transportService.process(DeviceTransportType.MQTT, TransportProtos.ValidateOrCreateDeviceX509CertRequestMsg
+                                .newBuilder().setCertificateChain(certificateChain).build(),
+                        new TransportServiceCallback<>() {
+                            @Override
+                            public void onSuccess(ValidateDeviceCredentialsResponse msg) {
+                                if (!StringUtils.isEmpty(msg.getCredentials())) {
+                                    credentialsBodyHolder[0] = msg.getCredentials();
+                                }
+                                latch.countDown();
+                            }
+
+                            @Override
+                            public void onError(Throwable e) {
+                                log.trace("Failed to process certificate chain: {}", certificateChain, e);
+                                latch.countDown();
+                            }
+                        });
+                latch.await(10, TimeUnit.SECONDS);
+                if (!clientDeviceCertValue.equals(credentialsBodyHolder[0])) {
+                    log.debug("Failed to find credentials for device certificate chain: {}", chain);
+                    if (chain.length == 1) {
+                        throw new CertificateException("Invalid Device Certificate");
+                    } else {
+                        throw new CertificateException("Invalid Chain of X509 Certificates");
+                    }
+                }
+            } catch (Exception e) {
+                log.error(e.getMessage(), e);
+            }
+        }
+
+        private boolean validateCertificateChain(X509Certificate[] chain) {
+            try {
+                if (chain.length > 1) {
+                    X509Certificate leafCert = chain[0];
+                    for (int i = 1; i < chain.length; i++) {
+                        X509Certificate intermediateCert = chain[i];
+                        leafCert.verify(intermediateCert.getPublicKey());
+                        leafCert = intermediateCert;
+                    }
+                }
+                return true;
+            } catch (Exception e) {
+                return false;
             }
         }
     }

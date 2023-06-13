@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.springframework.util.StringUtils;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.msg.queue.TopicPartitionInfo;
 import org.thingsboard.server.queue.TbQueueAdmin;
 import org.thingsboard.server.queue.TbQueueCallback;
@@ -61,6 +61,7 @@ public class TbKafkaProducerTemplate<T extends TbQueueMsg> implements TbQueuePro
             props.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
         }
         this.settings = settings;
+
         this.producer = new KafkaProducer<>(props);
         this.defaultTopic = defaultTopic;
         this.admin = admin;
@@ -73,25 +74,34 @@ public class TbKafkaProducerTemplate<T extends TbQueueMsg> implements TbQueuePro
 
     @Override
     public void send(TopicPartitionInfo tpi, T msg, TbQueueCallback callback) {
-        createTopicIfNotExist(tpi);
-        String key = msg.getKey().toString();
-        byte[] data = msg.getData();
-        ProducerRecord<String, byte[]> record;
-        Iterable<Header> headers = msg.getHeaders().getData().entrySet().stream().map(e -> new RecordHeader(e.getKey(), e.getValue())).collect(Collectors.toList());
-        record = new ProducerRecord<>(tpi.getFullTopicName(), null, key, data, headers);
-        producer.send(record, (metadata, exception) -> {
-            if (exception == null) {
-                if (callback != null) {
-                    callback.onSuccess(new KafkaTbQueueMsgMetadata(metadata));
-                }
-            } else {
-                if (callback != null) {
-                    callback.onFailure(exception);
+        try {
+            createTopicIfNotExist(tpi);
+            String key = msg.getKey().toString();
+            byte[] data = msg.getData();
+            ProducerRecord<String, byte[]> record;
+            Iterable<Header> headers = msg.getHeaders().getData().entrySet().stream().map(e -> new RecordHeader(e.getKey(), e.getValue())).collect(Collectors.toList());
+            record = new ProducerRecord<>(tpi.getFullTopicName(), null, key, data, headers);
+            producer.send(record, (metadata, exception) -> {
+                if (exception == null) {
+                    if (callback != null) {
+                        callback.onSuccess(new KafkaTbQueueMsgMetadata(metadata));
+                    }
                 } else {
-                    log.warn("Producer template failure: {}", exception.getMessage(), exception);
+                    if (callback != null) {
+                        callback.onFailure(exception);
+                    } else {
+                        log.warn("Producer template failure: {}", exception.getMessage(), exception);
+                    }
                 }
+            });
+        } catch (Exception e) {
+            if (callback != null) {
+                callback.onFailure(e);
+            } else {
+                log.warn("Producer template failure (send method wrapper): {}", e.getMessage(), e);
             }
-        });
+            throw e;
+        }
     }
 
     private void createTopicIfNotExist(TopicPartitionInfo tpi) {

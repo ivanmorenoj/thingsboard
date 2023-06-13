@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,10 +18,12 @@ package org.thingsboard.server.queue.provider;
 import org.thingsboard.server.gen.js.JsInvokeProtos;
 import org.thingsboard.server.gen.transport.TransportProtos.ToCoreMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToCoreNotificationMsg;
+import org.thingsboard.server.gen.transport.TransportProtos.ToOtaPackageStateServiceMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToRuleEngineMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToRuleEngineNotificationMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToTransportMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ToUsageStatsServiceMsg;
+import org.thingsboard.server.gen.transport.TransportProtos.ToVersionControlServiceMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.TransportApiRequestMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.TransportApiResponseMsg;
 import org.thingsboard.server.queue.TbQueueConsumer;
@@ -86,6 +88,20 @@ public interface TbCoreQueueFactory extends TbUsageStatsClientQueueFactory {
     TbQueueConsumer<TbProtoQueueMsg<ToUsageStatsServiceMsg>> createToUsageStatsServiceMsgConsumer();
 
     /**
+     * Used to consume messages about firmware update notifications by TB Core Service
+     *
+     * @return
+     */
+    TbQueueConsumer<TbProtoQueueMsg<ToOtaPackageStateServiceMsg>> createToOtaPackageStateServiceMsgConsumer();
+
+    /**
+     * Used to consume messages about firmware update notifications by TB Core Service
+     *
+     * @return
+     */
+    TbQueueProducer<TbProtoQueueMsg<ToOtaPackageStateServiceMsg>> createToOtaPackageStateServiceMsgProducer();
+
+    /**
      * Used to consume high priority messages by TB Core Service
      *
      * @return
@@ -107,4 +123,11 @@ public interface TbCoreQueueFactory extends TbUsageStatsClientQueueFactory {
     TbQueueProducer<TbProtoQueueMsg<TransportApiResponseMsg>> createTransportApiResponseProducer();
 
     TbQueueRequestTemplate<TbProtoJsQueueMsg<JsInvokeProtos.RemoteJsRequest>, TbProtoQueueMsg<JsInvokeProtos.RemoteJsResponse>> createRemoteJsRequestTemplate();
+
+    /**
+     * Used to push messages to instances of TB Version Control Service
+     *
+     * @return
+     */
+    TbQueueProducer<TbProtoQueueMsg<ToVersionControlServiceMsg>> createVersionControlMsgProducer();
 }

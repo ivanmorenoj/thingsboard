@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,11 +35,12 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.HttpComponentsAsyncClientHttpRequestFactory;
 import org.springframework.http.client.Netty4ClientHttpRequestFactory;
-import org.springframework.util.StringUtils;
 import org.springframework.util.concurrent.ListenableFuture;
 import org.springframework.util.concurrent.ListenableFutureCallback;
 import org.springframework.web.client.AsyncRestTemplate;
-import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.api.TbNodeException;
 import org.thingsboard.rule.engine.api.TbRelationTypes;
@@ -47,6 +48,7 @@ import org.thingsboard.rule.engine.api.util.TbNodeUtils;
 import org.thingsboard.rule.engine.credentials.BasicCredentials;
 import org.thingsboard.rule.engine.credentials.ClientCredentials;
 import org.thingsboard.rule.engine.credentials.CredentialsType;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 
@@ -54,11 +56,15 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
 import java.net.Authenticator;
 import java.net.PasswordAuthentication;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.Deque;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 
 @Data
 @Slf4j
@@ -78,7 +84,7 @@ public class TbHttpClient {
     private AsyncRestTemplate httpClient;
     private Deque<ListenableFuture<ResponseEntity<String>>> pendingFutures;
 
-    TbHttpClient(TbRestApiCallNodeConfiguration config) throws TbNodeException {
+    TbHttpClient(TbRestApiCallNodeConfiguration config, EventLoopGroup eventLoopGroupShared) throws TbNodeException {
         try {
             this.config = config;
             if (config.getMaxParallelRequestsCount() > 0) {
@@ -139,8 +145,7 @@ public class TbHttpClient {
                 }
                 httpClient = new AsyncRestTemplate();
             } else {
-                this.eventLoopGroup = new NioEventLoopGroup();
-                Netty4ClientHttpRequestFactory nettyFactory = new Netty4ClientHttpRequestFactory(this.eventLoopGroup);
+                Netty4ClientHttpRequestFactory nettyFactory = new Netty4ClientHttpRequestFactory(getSharedOrCreateEventLoopGroup(eventLoopGroupShared));
                 nettyFactory.setSslContext(config.getCredentials().initSslContext());
                 nettyFactory.setReadTimeout(config.getReadTimeoutMs());
                 httpClient = new AsyncRestTemplate(nettyFactory);
@@ -148,6 +153,13 @@ public class TbHttpClient {
         } catch (SSLException | NoSuchAlgorithmException e) {
             throw new TbNodeException(e);
         }
+    }
+
+    EventLoopGroup getSharedOrCreateEventLoopGroup(EventLoopGroup eventLoopGroupShared) {
+        if (eventLoopGroupShared != null) {
+            return eventLoopGroupShared;
+        }
+        return this.eventLoopGroup = new NioEventLoopGroup();
     }
 
     private void checkSystemProxyProperties() throws TbNodeException {
@@ -174,10 +186,18 @@ public class TbHttpClient {
         String endpointUrl = TbNodeUtils.processPattern(config.getRestEndpointUrlPattern(), msg);
         HttpHeaders headers = prepareHeaders(msg);
         HttpMethod method = HttpMethod.valueOf(config.getRequestMethod());
-        HttpEntity<String> entity = new HttpEntity<>(msg.getData(), headers);
+        HttpEntity<String> entity;
+        if(HttpMethod.GET.equals(method) || HttpMethod.HEAD.equals(method) ||
+            HttpMethod.OPTIONS.equals(method) || HttpMethod.TRACE.equals(method) ||
+            config.isIgnoreRequestBody()) {
+            entity = new HttpEntity<>(headers);
+        } else {
+            entity = new HttpEntity<>(getData(msg), headers);
+        }
 
+        URI uri = buildEncodedUri(endpointUrl);
         ListenableFuture<ResponseEntity<String>> future = httpClient.exchange(
-                endpointUrl, method, entity, String.class);
+                uri, method, entity, String.class);
         future.addCallback(new ListenableFutureCallback<ResponseEntity<String>>() {
             @Override
             public void onFailure(Throwable throwable) {
@@ -201,13 +221,63 @@ public class TbHttpClient {
         }
     }
 
+    public URI buildEncodedUri(String endpointUrl) {
+        if (endpointUrl == null) {
+            throw new RuntimeException("Url string cannot be null!");
+        }
+        if (endpointUrl.isEmpty()) {
+            throw new RuntimeException("Url string cannot be empty!");
+        }
+
+        URI uri = UriComponentsBuilder.fromUriString(endpointUrl).build().encode().toUri();
+        if (uri.getScheme() == null || uri.getScheme().isEmpty()) {
+            throw new RuntimeException("Transport scheme(protocol) must be provided!");
+        }
+
+        boolean authorityNotValid = uri.getAuthority() == null || uri.getAuthority().isEmpty();
+        boolean hostNotValid = uri.getHost() == null || uri.getHost().isEmpty();
+        if (authorityNotValid || hostNotValid) {
+            throw new RuntimeException("Url string is invalid!");
+        }
+
+        return uri;
+    }
+
+    private String getData(TbMsg msg) {
+        String data = msg.getData();
+
+        if (config.isTrimDoubleQuotes()) {
+            final String dataBefore = data;
+            data = data.replaceAll("^\"|\"$", "");;
+            log.trace("Trimming double quotes. Before trim: [{}], after trim: [{}]", dataBefore, data);
+        }
+
+        return data;
+    }
+
     private TbMsg processResponse(TbContext ctx, TbMsg origMsg, ResponseEntity<String> response) {
         TbMsgMetaData metaData = origMsg.getMetaData();
         metaData.putValue(STATUS, response.getStatusCode().name());
         metaData.putValue(STATUS_CODE, response.getStatusCode().value() + "");
         metaData.putValue(STATUS_REASON, response.getStatusCode().getReasonPhrase());
-        response.getHeaders().toSingleValueMap().forEach(metaData::putValue);
-        return ctx.transformMsg(origMsg, origMsg.getType(), origMsg.getOriginator(), metaData, response.getBody());
+        headersToMetaData(response.getHeaders(), metaData::putValue);
+        String body = response.getBody() == null ? "{}" : response.getBody();
+        return ctx.transformMsg(origMsg, origMsg.getType(), origMsg.getOriginator(), metaData, body);
+    }
+
+    void headersToMetaData(Map<String, List<String>> headers, BiConsumer<String, String> consumer) {
+        if (headers == null) {
+            return;
+        }
+        headers.forEach((key, values) -> {
+            if (values != null && !values.isEmpty()) {
+                if (values.size() == 1) {
+                    consumer.accept(key, values.get(0));
+                } else {
+                    consumer.accept(key, JacksonUtil.toString(values));
+                }
+            }
+        });
     }
 
     private TbMsg processFailureResponse(TbContext ctx, TbMsg origMsg, ResponseEntity<String> response) {
@@ -216,17 +286,18 @@ public class TbHttpClient {
         metaData.putValue(STATUS_CODE, response.getStatusCode().value() + "");
         metaData.putValue(STATUS_REASON, response.getStatusCode().getReasonPhrase());
         metaData.putValue(ERROR_BODY, response.getBody());
+        headersToMetaData(response.getHeaders(), metaData::putValue);
         return ctx.transformMsg(origMsg, origMsg.getType(), origMsg.getOriginator(), metaData, origMsg.getData());
     }
 
     private TbMsg processException(TbContext ctx, TbMsg origMsg, Throwable e) {
         TbMsgMetaData metaData = origMsg.getMetaData();
         metaData.putValue(ERROR, e.getClass() + ": " + e.getMessage());
-        if (e instanceof HttpClientErrorException) {
-            HttpClientErrorException httpClientErrorException = (HttpClientErrorException) e;
-            metaData.putValue(STATUS, httpClientErrorException.getStatusText());
-            metaData.putValue(STATUS_CODE, httpClientErrorException.getRawStatusCode() + "");
-            metaData.putValue(ERROR_BODY, httpClientErrorException.getResponseBodyAsString());
+        if (e instanceof RestClientResponseException) {
+            RestClientResponseException restClientResponseException = (RestClientResponseException) e;
+            metaData.putValue(STATUS, restClientResponseException.getStatusText());
+            metaData.putValue(STATUS_CODE, restClientResponseException.getRawStatusCode() + "");
+            metaData.putValue(ERROR_BODY, restClientResponseException.getResponseBodyAsString());
         }
         return ctx.transformMsg(origMsg, origMsg.getType(), origMsg.getOriginator(), metaData, origMsg.getData());
     }

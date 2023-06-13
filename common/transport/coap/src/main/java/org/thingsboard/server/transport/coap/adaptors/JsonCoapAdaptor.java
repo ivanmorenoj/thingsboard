@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,14 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import com.google.protobuf.Descriptors;
+import com.google.protobuf.DynamicMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.californium.core.coap.CoAP;
+import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.transport.adaptor.AdaptorException;
 import org.thingsboard.server.common.transport.adaptor.JsonConverter;
@@ -64,7 +67,7 @@ public class JsonCoapAdaptor implements CoapTransportAdaptor {
     }
 
     @Override
-    public TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound) throws AdaptorException {
+    public TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound, Descriptors.Descriptor rpcResponseMsgDescriptor) throws AdaptorException {
         Optional<Integer> requestId = CoapTransportResource.getRequestId(inbound);
         String payload = validatePayload(sessionId, inbound, false);
         JsonObject response = new JsonParser().parse(payload).getAsJsonObject();
@@ -90,13 +93,13 @@ public class JsonCoapAdaptor implements CoapTransportAdaptor {
     }
 
     @Override
-    public Response convertToPublish(boolean isConfirmable, TransportProtos.AttributeUpdateNotificationMsg msg) throws AdaptorException {
-        return getObserveNotification(isConfirmable, JsonConverter.toJson(msg));
+    public Response convertToPublish(TransportProtos.AttributeUpdateNotificationMsg msg) throws AdaptorException {
+        return getObserveNotification(JsonConverter.toJson(msg));
     }
 
     @Override
-    public Response convertToPublish(boolean isConfirmable, TransportProtos.ToDeviceRpcRequestMsg msg) throws AdaptorException {
-        return getObserveNotification(isConfirmable, JsonConverter.toJson(msg, true));
+    public Response convertToPublish(TransportProtos.ToDeviceRpcRequestMsg msg, DynamicMessage.Builder rpcRequestDynamicMessageBuilder) throws AdaptorException {
+        return getObserveNotification(JsonConverter.toJson(msg, true));
     }
 
     @Override
@@ -119,32 +122,48 @@ public class JsonCoapAdaptor implements CoapTransportAdaptor {
 
     @Override
     public Response convertToPublish(TransportProtos.GetAttributeResponseMsg msg) throws AdaptorException {
-        if (msg.getClientAttributeListCount() == 0 && msg.getSharedAttributeListCount() == 0) {
-            return new Response(CoAP.ResponseCode.NOT_FOUND);
+        if (msg.getSharedStateMsg()) {
+            if (StringUtils.isEmpty(msg.getError())) {
+                Response response = new Response(CoAP.ResponseCode.CONTENT);
+                TransportProtos.AttributeUpdateNotificationMsg notificationMsg = TransportProtos.AttributeUpdateNotificationMsg.newBuilder().addAllSharedUpdated(msg.getSharedAttributeListList()).build();
+                JsonObject result = JsonConverter.toJson(notificationMsg);
+                response.setPayload(result.toString());
+                return response;
+            } else {
+                return new Response(CoAP.ResponseCode.INTERNAL_SERVER_ERROR);
+            }
         } else {
-            Response response = new Response(CoAP.ResponseCode.CONTENT);
-            JsonObject result = JsonConverter.toJson(msg);
-            response.setPayload(result.toString());
-            return response;
+            if (msg.getClientAttributeListCount() == 0 && msg.getSharedAttributeListCount() == 0) {
+                return new Response(CoAP.ResponseCode.NOT_FOUND);
+            } else {
+                Response response = new Response(CoAP.ResponseCode.CONTENT);
+                JsonObject result = JsonConverter.toJson(msg);
+                response.setPayload(result.toString());
+                return response;
+            }
         }
     }
 
-    private Response getObserveNotification(boolean confirmable, JsonElement json) {
+    private Response getObserveNotification(JsonElement json) {
         Response response = new Response(CoAP.ResponseCode.CONTENT);
         response.setPayload(json.toString());
-        response.setConfirmable(confirmable);
         return response;
     }
 
     private String validatePayload(UUID sessionId, Request inbound, boolean isEmptyPayloadAllowed) throws AdaptorException {
         String payload = inbound.getPayloadString();
         if (payload == null) {
-            log.warn("[{}] Payload is empty!", sessionId);
+            log.debug("[{}] Payload is empty!", sessionId);
             if (!isEmptyPayloadAllowed) {
                 throw new AdaptorException(new IllegalArgumentException("Payload is empty!"));
             }
         }
         return payload;
+    }
+
+    @Override
+    public int getContentFormat() {
+        return MediaTypeRegistry.APPLICATION_JSON;
     }
 
 }

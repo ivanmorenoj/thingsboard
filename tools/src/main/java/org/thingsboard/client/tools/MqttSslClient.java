@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,17 +20,18 @@ package org.thingsboard.client.tools;
  * This class is intended for manual MQTT SSL Testing
  */
 
-import com.google.common.io.Resources;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.thingsboard.server.common.data.ResourceUtils;
 
-import javax.net.ssl.*;
-import java.io.File;
-import java.io.FileInputStream;
-import java.net.URL;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import java.security.KeyStore;
 
 @Slf4j
@@ -47,20 +48,15 @@ public class MqttSslClient {
     public static void main(String[] args) {
 
         try {
-            URL ksUrl = Resources.getResource(KEY_STORE_FILE);
-            File ksFile = new File(ksUrl.toURI());
-            URL tsUrl = Resources.getResource(KEY_STORE_FILE);
-            File tsFile = new File(tsUrl.toURI());
-
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
 
             KeyStore trustStore = KeyStore.getInstance(JKS);
             char[] ksPwd = new char[]{0x63, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x5F, 0x6B, 0x73, 0x5F, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6F, 0x72, 0x64};
-            trustStore.load(new FileInputStream(tsFile), ksPwd);
+            trustStore.load(ResourceUtils.getInputStream(MqttSslClient.class.getClassLoader(), KEY_STORE_FILE), ksPwd);
             tmf.init(trustStore);
             KeyStore ks = KeyStore.getInstance(JKS);
 
-            ks.load(new FileInputStream(ksFile), ksPwd);
+            ks.load(ResourceUtils.getInputStream(MqttSslClient.class.getClassLoader(), KEY_STORE_FILE), ksPwd);
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             char[] clientPwd = new char[]{0x63, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x5F, 0x6B, 0x65, 0x79, 0x5F, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6F, 0x72, 0x64};
             kmf.init(ks, clientPwd);

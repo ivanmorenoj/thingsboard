@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,11 @@ import org.thingsboard.server.common.data.DataConstants;
 import org.thingsboard.server.common.data.kv.AttributeKey;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * @author Andrew Shvayka
@@ -71,7 +75,7 @@ public class DeviceAttributes {
     public void remove(AttributeKey key) {
         Map<String, AttributeKvEntry> map = getMapByScope(key.getScope());
         if (map != null) {
-            map.remove(key);
+            map.remove(key.getAttributeKey());
         }
     }
 

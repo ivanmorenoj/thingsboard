@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,14 +15,14 @@
 ///
 
 import { Component, ElementRef, forwardRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { ControlValueAccessor, FormControl, NG_VALIDATORS, NG_VALUE_ACCESSOR, Validator } from '@angular/forms';
+import { ControlValueAccessor, UntypedFormControl, NG_VALIDATORS, NG_VALUE_ACCESSOR, Validator } from '@angular/forms';
 import { Ace } from 'ace-builds';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { ActionNotificationHide, ActionNotificationShow } from '@core/notification/notification.actions';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { CancelAnimationFrame, RafService } from '@core/services/raf.service';
-import { guid } from '@core/utils';
+import { guid, isDefinedAndNotNull, isObject, isUndefined } from '@core/utils';
 import { ResizeObserver } from '@juggle/resize-observer';
 import { getAce } from '@shared/models/ace/ace.models';
 
@@ -60,21 +60,27 @@ export class JsonObjectEditComponent implements OnInit, ControlValueAccessor, Va
 
   @Input() fillHeight: boolean;
 
-  @Input() editorStyle: {[klass: string]: any};
+  @Input() editorStyle: { [klass: string]: any };
+
+  @Input() sort: (key: string, value: any) => any;
 
   private requiredValue: boolean;
+
   get required(): boolean {
     return this.requiredValue;
   }
+
   @Input()
   set required(value: boolean) {
     this.requiredValue = coerceBooleanProperty(value);
   }
 
   private readonlyValue: boolean;
+
   get readonly(): boolean {
     return this.readonlyValue;
   }
+
   @Input()
   set readonly(value: boolean) {
     this.readonlyValue = coerceBooleanProperty(value);
@@ -141,6 +147,9 @@ export class JsonObjectEditComponent implements OnInit, ControlValueAccessor, Va
     if (this.editorResize$) {
       this.editorResize$.disconnect();
     }
+    if (this.jsonEditor) {
+      this.jsonEditor.destroy();
+    }
   }
 
   private onAceEditorResize() {
@@ -168,7 +177,7 @@ export class JsonObjectEditComponent implements OnInit, ControlValueAccessor, Va
     }
   }
 
-  public validate(c: FormControl) {
+  public validate(c: UntypedFormControl) {
     return (this.objectValid) ? null : {
       jsonParseError: {
         valid: false,
@@ -224,8 +233,11 @@ export class JsonObjectEditComponent implements OnInit, ControlValueAccessor, Va
     this.contentValue = '';
     this.objectValid = false;
     try {
-      if (this.modelValue) {
-        this.contentValue = JSON.stringify(this.modelValue, undefined, 2);
+      if (isDefinedAndNotNull(this.modelValue)) {
+        this.contentValue = JSON.stringify(this.modelValue, isUndefined(this.sort) ? undefined :
+          (key, objectValue) => {
+            return this.sort(key, objectValue);
+          }, 2);
         this.objectValid = true;
       } else {
         this.objectValid = !this.required;
@@ -250,6 +262,9 @@ export class JsonObjectEditComponent implements OnInit, ControlValueAccessor, Va
       if (this.contentValue && this.contentValue.length > 0) {
         try {
           data = JSON.parse(this.contentValue);
+          if (!isObject(data)) {
+            throw new TypeError(`Value is not a valid JSON`);
+          }
           this.objectValid = true;
           this.validationError = '';
         } catch (ex) {

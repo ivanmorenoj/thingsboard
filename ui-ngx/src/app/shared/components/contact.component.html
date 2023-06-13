@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -28,10 +28,16 @@
     <mat-form-field class="mat-block">
       <mat-label translate>contact.city</mat-label>
       <input matInput formControlName="city">
+      <mat-error *ngIf="parentForm.get('city').hasError('maxlength')">
+        {{ 'contact.city-max-length' | translate }}
+      </mat-error>
     </mat-form-field>
     <mat-form-field class="mat-block">
       <mat-label translate>contact.state</mat-label>
       <input matInput formControlName="state">
+      <mat-error *ngIf="parentForm.get('state').hasError('maxlength')">
+        {{ 'contact.state-max-length' | translate }}
+      </mat-error>
     </mat-form-field>
     <mat-form-field class="mat-block">
       <mat-label translate>contact.postal-code</mat-label>
@@ -49,10 +55,11 @@
     <mat-label translate>contact.address2</mat-label>
     <input matInput formControlName="address2">
   </mat-form-field>
-  <mat-form-field class="mat-block">
-    <mat-label translate>contact.phone</mat-label>
-    <input matInput formControlName="phone">
-  </mat-form-field>
+  <tb-phone-input [required]="false"
+                  label="{{ 'contact.phone' | translate }}"
+                  [enableFlagsSelect]="true"
+                  formControlName="phone">
+  </tb-phone-input>
   <mat-form-field class="mat-block">
     <mat-label translate>contact.email</mat-label>
     <input matInput formControlName="email">

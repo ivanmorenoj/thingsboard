@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
 import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 
@@ -39,11 +39,7 @@ public class TbNodeUtils {
 
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    private static final String METADATA_VARIABLE_TEMPLATE = "${%s}";
-
     private static final Pattern DATA_PATTERN = Pattern.compile("(\\$\\[)(.*?)(])");
-
-    private static final String DATA_VARIABLE_TEMPLATE = "$[%s]";
 
     public static <T> T convert(TbNodeConfiguration configuration, Class<T> clazz) throws TbNodeException {
         try {
@@ -80,7 +76,7 @@ public class TbNodeUtils {
                     }
 
                     if (jsonNode != null && jsonNode.isValueNode()) {
-                        result = result.replace(String.format(DATA_VARIABLE_TEMPLATE, group), jsonNode.asText());
+                        result = result.replace(formatDataVarTemplate(group), jsonNode.asText());
                     }
                 }
             }
@@ -98,16 +94,26 @@ public class TbNodeUtils {
     }
 
     public static String processPattern(String pattern, TbMsgMetaData metaData) {
-        String result = pattern;
-        for (Map.Entry<String, String> keyVal : metaData.values().entrySet()) {
-            result = processVar(result, keyVal.getKey(), keyVal.getValue());
+        return processTemplate(pattern, metaData.values());
+    }
+
+    public static String processTemplate(String template, Map<String, String> data) {
+        String result = template;
+        for (Map.Entry<String, String> kv : data.entrySet()) {
+            result = processVar(result, kv.getKey(), kv.getValue());
         }
         return result;
     }
 
     private static String processVar(String pattern, String key, String val) {
-        String varPattern = String.format(METADATA_VARIABLE_TEMPLATE, key);
-        return pattern.replace(varPattern, val);
+        return pattern.replace(formatMetadataVarTemplate(key), val);
     }
 
+    static String formatDataVarTemplate(String key) {
+        return "$[" + key + ']';
+    }
+
+    static String formatMetadataVarTemplate(String key) {
+        return "${" + key + '}';
+    }
 }

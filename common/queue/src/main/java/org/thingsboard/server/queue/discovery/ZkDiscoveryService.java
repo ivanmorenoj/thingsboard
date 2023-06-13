@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package org.thingsboard.server.queue.discovery;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -33,19 +34,19 @@ import org.apache.zookeeper.KeeperException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
 import org.thingsboard.server.gen.transport.TransportProtos;
+import org.thingsboard.server.queue.util.AfterStartUp;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent.Type.CHILD_REMOVED;
@@ -69,7 +70,7 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
     private final TbServiceInfoProvider serviceInfoProvider;
     private final PartitionService partitionService;
 
-    private ExecutorService reconnectExecutorService;
+    private ScheduledExecutorService zkExecutorService;
     private CuratorFramework client;
     private PathChildrenCache cache;
     private String nodePath;
@@ -77,7 +78,8 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
 
     private volatile boolean stopped = true;
 
-    public ZkDiscoveryService(TbServiceInfoProvider serviceInfoProvider, PartitionService partitionService) {
+    public ZkDiscoveryService(TbServiceInfoProvider serviceInfoProvider,
+                              PartitionService partitionService) {
         this.serviceInfoProvider = serviceInfoProvider;
         this.partitionService = partitionService;
     }
@@ -90,7 +92,7 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
         Assert.notNull(zkConnectionTimeout, missingProperty("zk.connection_timeout_ms"));
         Assert.notNull(zkSessionTimeout, missingProperty("zk.session_timeout_ms"));
 
-        reconnectExecutorService = Executors.newSingleThreadExecutor(ThingsBoardThreadFactory.forName("zk-discovery"));
+        zkExecutorService = Executors.newSingleThreadScheduledExecutor(ThingsBoardThreadFactory.forName("zk-discovery"));
 
         log.info("Initializing discovery service using ZK connect string: {}", zkUrl);
 
@@ -98,7 +100,8 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
         initZkClient();
     }
 
-    private List<TransportProtos.ServiceInfo> getOtherServers() {
+    @Override
+    public List<TransportProtos.ServiceInfo> getOtherServers() {
         return cache.getCurrentData().stream()
                 .filter(cd -> !cd.getPath().equals(nodePath))
                 .map(cd -> {
@@ -112,8 +115,12 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
                 .collect(Collectors.toList());
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    @Order(value = 1)
+    @Override
+    public boolean isMonolith() {
+        return false;
+    }
+
+    @AfterStartUp(order = AfterStartUp.DISCOVERY_SERVICE)
     public void onApplicationEvent(ApplicationReadyEvent event) {
         if (stopped) {
             log.debug("Ignoring application ready event. Service is stopped.");
@@ -125,14 +132,18 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
             log.debug("Ignoring application ready event, ZK client is not started, ZK client state [{}]", client.getState());
             return;
         }
-        publishCurrentServer();
-        partitionService.recalculatePartitions(serviceInfoProvider.getServiceInfo(), getOtherServers());
+        log.info("Going to publish current server...");
+        zkExecutorService.scheduleAtFixedRate(this::publishCurrentServer, 0, 1, TimeUnit.MINUTES);
+        log.info("Going to recalculate partitions...");
+        recalculatePartitions();
     }
 
+    @SneakyThrows
     public synchronized void publishCurrentServer() {
         TransportProtos.ServiceInfo self = serviceInfoProvider.getServiceInfo();
         if (currentServerExists()) {
-            log.info("[{}] ZK node for current instance already exists, NOT created new one: {}", self.getServiceId(), nodePath);
+            log.trace("[{}] Updating ZK node for current instance: {}", self.getServiceId(), nodePath);
+            client.setData().forPath(nodePath, serviceInfoProvider.generateNewServiceInfoWithCurrentSystemInfo().toByteArray());
         } else {
             try {
                 log.info("[{}] Creating ZK node for current instance", self.getServiceId());
@@ -171,7 +182,7 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
         return (client, newState) -> {
             log.info("[{}] ZK state changed: {}", self.getServiceId(), newState);
             if (newState == ConnectionState.LOST) {
-                reconnectExecutorService.submit(this::reconnect);
+                zkExecutorService.submit(this::reconnect);
             }
         };
     }
@@ -236,7 +247,7 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
     @PreDestroy
     public void destroy() {
         destroyZkClient();
-        reconnectExecutorService.shutdownNow();
+        zkExecutorService.shutdownNow();
         log.info("Stopped discovery service");
     }
 
@@ -276,16 +287,23 @@ public class ZkDiscoveryService implements DiscoveryService, PathChildrenCacheLi
             log.error("Failed to decode server instance for node {}", data.getPath(), e);
             throw e;
         }
-        log.info("Processing [{}] event for [{}]", pathChildrenCacheEvent.getType(), instance.getServiceId());
+        log.debug("Processing [{}] event for [{}]", pathChildrenCacheEvent.getType(), instance.getServiceId());
         switch (pathChildrenCacheEvent.getType()) {
             case CHILD_ADDED:
-            case CHILD_UPDATED:
             case CHILD_REMOVED:
-                partitionService.recalculatePartitions(serviceInfoProvider.getServiceInfo(), getOtherServers());
+                recalculatePartitions();
                 break;
             default:
                 break;
         }
+    }
+
+    /**
+     * A single entry point to recalculate partitions
+     * Synchronized to ensure that other servers info is up to date
+     * */
+    synchronized void recalculatePartitions() {
+        partitionService.recalculatePartitions(serviceInfoProvider.getServiceInfo(), getOtherServers());
     }
 
 }

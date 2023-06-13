@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,15 +15,14 @@
 ///
 
 import { Component, ElementRef, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormControl, NG_VALIDATORS, NG_VALUE_ACCESSOR, Validator } from '@angular/forms';
+import { ControlValueAccessor, UntypedFormControl, NG_VALIDATORS, NG_VALUE_ACCESSOR, Validator } from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { EntityType } from '@shared/models/entity-type.models';
 import {
   CsvColumnParam,
   ImportEntityColumnType,
-  importEntityColumnTypeTranslations,
-  importEntityObjectColumns
+  importEntityColumnTypeTranslations
 } from '@home/components/import-export/import-export.models';
 import { BehaviorSubject, Observable } from 'rxjs';
 import { CollectionViewer, DataSource } from '@angular/cdk/collections';
@@ -57,7 +56,11 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
 
   columnTypes: AssignmentColumnType[] = [];
 
+  columnDeviceCredentials: AssignmentColumnType[] = [];
+
   columnTypesTranslations = importEntityColumnTypeTranslations;
+
+  readonly entityTypeDevice = EntityType.DEVICE;
 
   private columns: CsvColumnParam[];
 
@@ -83,12 +86,37 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
           { value: ImportEntityColumnType.sharedAttribute },
           { value: ImportEntityColumnType.serverAttribute },
           { value: ImportEntityColumnType.timeseries },
-          { value: ImportEntityColumnType.accessToken },
           { value: ImportEntityColumnType.isGateway }
+        );
+        this.columnDeviceCredentials.push(
+          { value: ImportEntityColumnType.accessToken },
+          { value: ImportEntityColumnType.x509 },
+          { value: ImportEntityColumnType.mqttClientId },
+          { value: ImportEntityColumnType.mqttUserName },
+          { value: ImportEntityColumnType.mqttPassword },
+          { value: ImportEntityColumnType.lwm2mClientEndpoint },
+          { value: ImportEntityColumnType.lwm2mClientSecurityConfigMode },
+          { value: ImportEntityColumnType.lwm2mClientIdentity },
+          { value: ImportEntityColumnType.lwm2mClientKey },
+          { value: ImportEntityColumnType.lwm2mClientCert },
+          { value: ImportEntityColumnType.lwm2mBootstrapServerSecurityMode },
+          { value: ImportEntityColumnType.lwm2mBootstrapServerClientPublicKeyOrId },
+          { value: ImportEntityColumnType.lwm2mBootstrapServerClientSecretKey },
+          { value: ImportEntityColumnType.lwm2mServerSecurityMode },
+          { value: ImportEntityColumnType.lwm2mServerClientPublicKeyOrId },
+          { value: ImportEntityColumnType.lwm2mServerClientSecretKey },
         );
         break;
       case EntityType.ASSET:
         this.columnTypes.push(
+          { value: ImportEntityColumnType.serverAttribute },
+          { value: ImportEntityColumnType.timeseries }
+        );
+        break;
+      case EntityType.EDGE:
+        this.columnTypes.push(
+          { value: ImportEntityColumnType.routingKey },
+          { value: ImportEntityColumnType.secret },
           { value: ImportEntityColumnType.serverAttribute },
           { value: ImportEntityColumnType.timeseries }
         );
@@ -115,8 +143,6 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
     const isSelectName = this.columns.findIndex((column) => column.type === ImportEntityColumnType.name) > -1;
     const isSelectType = this.columns.findIndex((column) => column.type === ImportEntityColumnType.type) > -1;
     const isSelectLabel = this.columns.findIndex((column) => column.type === ImportEntityColumnType.label) > -1;
-    const isSelectCredentials = this.columns.findIndex((column) => column.type === ImportEntityColumnType.accessToken) > -1;
-    const isSelectGateway = this.columns.findIndex((column) => column.type === ImportEntityColumnType.isGateway) > -1;
     const isSelectDescription = this.columns.findIndex((column) => column.type === ImportEntityColumnType.description) > -1;
     const hasInvalidColumn = this.columns.findIndex((column) => !this.columnValid(column)) > -1;
 
@@ -127,14 +153,29 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
     this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.label).disabled = isSelectLabel;
     this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.description).disabled = isSelectDescription;
 
-    const isGatewayColumnType = this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.isGateway);
-    if (isGatewayColumnType) {
-      isGatewayColumnType.disabled = isSelectGateway;
+    if (this.entityType === EntityType.DEVICE) {
+      const isSelectGateway = this.columns.findIndex((column) => column.type === ImportEntityColumnType.isGateway) > -1;
+
+      const isGatewayColumnType = this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.isGateway);
+      if (isGatewayColumnType) {
+        isGatewayColumnType.disabled = isSelectGateway;
+      }
+
+      this.columnDeviceCredentials.forEach((columnCredential) => {
+        columnCredential.disabled = this.columns.findIndex(column => column.type === columnCredential.value) > -1;
+      });
     }
-    const accessTokenColumnType = this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.accessToken);
-    if (accessTokenColumnType) {
-      accessTokenColumnType.disabled = isSelectCredentials;
+
+    if (this.entityType === EntityType.EDGE) {
+      const isSelectRoutingKey = this.columns.findIndex((column) => column.type === ImportEntityColumnType.routingKey) > -1;
+      const isSelectSecret = this.columns.findIndex((column) => column.type === ImportEntityColumnType.secret) > -1;
+
+      this.valid = this.valid && isSelectSecret && isSelectRoutingKey;
+
+      this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.routingKey).disabled = isSelectRoutingKey;
+      this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.secret).disabled = isSelectSecret;
     }
+
     if (this.propagateChange) {
       this.propagateChange(this.columns);
     } else {
@@ -150,14 +191,14 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
   }
 
   private columnValid(column: CsvColumnParam): boolean {
-    if (!importEntityObjectColumns.includes(column.type)) {
+    if (this.isColumnTypeDiffers(column.type)) {
       return column.key && column.key.trim().length > 0;
     } else {
       return true;
     }
   }
 
-  public validate(c: FormControl) {
+  public validate(c: UntypedFormControl) {
     return (this.valid) ? null : {
       columnsInvalid: true
     };

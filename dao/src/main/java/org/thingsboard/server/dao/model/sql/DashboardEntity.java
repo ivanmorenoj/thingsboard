@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@ import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.TypeDef;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.Dashboard;
 import org.thingsboard.server.common.data.ShortCustomerInfo;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
@@ -58,16 +58,28 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
 
     @Column(name = ModelConstants.DASHBOARD_TITLE_PROPERTY)
     private String title;
-    
+
+    @Column(name = ModelConstants.DASHBOARD_IMAGE_PROPERTY)
+    private String image;
+
     @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
     private String searchText;
 
     @Column(name = ModelConstants.DASHBOARD_ASSIGNED_CUSTOMERS_PROPERTY)
     private String assignedCustomers;
 
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_HIDE_PROPERTY)
+    private boolean mobileHide;
+
+    @Column(name = ModelConstants.DASHBOARD_MOBILE_ORDER_PROPERTY)
+    private Integer mobileOrder;
+
     @Type(type = "json")
     @Column(name = ModelConstants.DASHBOARD_CONFIGURATION_PROPERTY)
     private JsonNode configuration;
+
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
 
     public DashboardEntity() {
         super();
@@ -82,6 +94,7 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
             this.tenantId = dashboard.getTenantId().getId();
         }
         this.title = dashboard.getTitle();
+        this.image = dashboard.getImage();
         if (dashboard.getAssignedCustomers() != null) {
             try {
                 this.assignedCustomers = objectMapper.writeValueAsString(dashboard.getAssignedCustomers());
@@ -89,7 +102,12 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
                 log.error("Unable to serialize assigned customers to string!", e);
             }
         }
+        this.mobileHide = dashboard.isMobileHide();
+        this.mobileOrder = dashboard.getMobileOrder();
         this.configuration = dashboard.getConfiguration();
+        if (dashboard.getExternalId() != null) {
+            this.externalId = dashboard.getExternalId().getId();
+        }
     }
 
     @Override
@@ -107,9 +125,10 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
         Dashboard dashboard = new Dashboard(new DashboardId(this.getUuid()));
         dashboard.setCreatedTime(this.getCreatedTime());
         if (tenantId != null) {
-            dashboard.setTenantId(new TenantId(tenantId));
+            dashboard.setTenantId(TenantId.fromUUID(tenantId));
         }
         dashboard.setTitle(title);
+        dashboard.setImage(image);
         if (!StringUtils.isEmpty(assignedCustomers)) {
             try {
                 dashboard.setAssignedCustomers(objectMapper.readValue(assignedCustomers, assignedCustomersType));
@@ -117,7 +136,12 @@ public final class DashboardEntity extends BaseSqlEntity<Dashboard> implements S
                 log.warn("Unable to parse assigned customers!", e);
             }
         }
+        dashboard.setMobileHide(mobileHide);
+        dashboard.setMobileOrder(mobileOrder);
         dashboard.setConfiguration(configuration);
+        if (externalId != null) {
+            dashboard.setExternalId(new DashboardId(externalId));
+        }
         return dashboard;
     }
 }

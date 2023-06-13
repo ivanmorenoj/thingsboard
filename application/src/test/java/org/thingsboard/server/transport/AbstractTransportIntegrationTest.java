@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,35 +15,9 @@
  */
 package org.thingsboard.server.transport;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
-import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
-import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
-import org.junit.Assert;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.DeviceProfile;
-import org.thingsboard.server.common.data.DeviceProfileProvisionType;
-import org.thingsboard.server.common.data.DeviceProfileType;
-import org.thingsboard.server.common.data.DeviceTransportType;
-import org.thingsboard.server.common.data.Tenant;
-import org.thingsboard.server.common.data.TransportPayloadType;
-import org.thingsboard.server.common.data.User;
-import org.thingsboard.server.common.data.device.profile.AllowCreateNewDevicesDeviceProfileProvisionConfiguration;
-import org.thingsboard.server.common.data.device.profile.CheckPreProvisionedDevicesDeviceProfileProvisionConfiguration;
-import org.thingsboard.server.common.data.device.profile.DefaultDeviceProfileConfiguration;
-import org.thingsboard.server.common.data.device.profile.DeviceProfileData;
-import org.thingsboard.server.common.data.device.profile.DeviceProfileProvisionConfiguration;
-import org.thingsboard.server.common.data.device.profile.DisabledDeviceProfileProvisionConfiguration;
-import org.thingsboard.server.common.data.device.profile.JsonTransportPayloadConfiguration;
-import org.thingsboard.server.common.data.device.profile.MqttDeviceProfileTransportConfiguration;
-import org.thingsboard.server.common.data.device.profile.ProtoTransportPayloadConfiguration;
-import org.thingsboard.server.common.data.device.profile.TransportPayloadTypeConfiguration;
-import org.thingsboard.server.common.data.security.Authority;
-import org.thingsboard.server.common.data.security.DeviceCredentials;
 import org.thingsboard.server.controller.AbstractControllerTest;
 import org.thingsboard.server.gen.transport.TransportProtos;
 
@@ -51,74 +25,78 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
 @Slf4j
 public abstract class AbstractTransportIntegrationTest extends AbstractControllerTest {
+
+    protected static final int DEFAULT_WAIT_TIMEOUT_SECONDS = 30;
 
     protected static final String MQTT_URL = "tcp://localhost:1883";
     protected static final String COAP_BASE_URL = "coap://localhost:5683/api/v1/";
 
     protected static final AtomicInteger atomicInteger = new AtomicInteger(2);
 
-    protected static final String DEVICE_TELEMETRY_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
+    public static final String DEVICE_TELEMETRY_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
             "\n" +
             "package test;\n" +
             "\n" +
             "message PostTelemetry {\n" +
-            "  string key1 = 1;\n" +
-            "  bool key2 = 2;\n" +
-            "  double key3 = 3;\n" +
-            "  int32 key4 = 4;\n" +
+            "  optional string key1 = 1;\n" +
+            "  optional bool key2 = 2;\n" +
+            "  optional double key3 = 3;\n" +
+            "  optional int32 key4 = 4;\n" +
             "  JsonObject key5 = 5;\n" +
             "\n" +
             "  message JsonObject {\n" +
-            "    int32 someNumber = 6;\n" +
+            "    optional int32 someNumber = 6;\n" +
             "    repeated int32 someArray = 7;\n" +
-            "    NestedJsonObject someNestedObject = 8;\n" +
+            "    optional NestedJsonObject someNestedObject = 8;\n" +
             "    message NestedJsonObject {\n" +
-            "       string key = 9;\n" +
+            "       optional string key = 9;\n" +
             "    }\n" +
             "  }\n" +
             "}";
 
-    protected static final String DEVICE_ATTRIBUTES_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
+    public static final String DEVICE_ATTRIBUTES_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
             "\n" +
             "package test;\n" +
             "\n" +
             "message PostAttributes {\n" +
-            "  string key1 = 1;\n" +
-            "  bool key2 = 2;\n" +
-            "  double key3 = 3;\n" +
-            "  int32 key4 = 4;\n" +
+            "  optional string key1 = 1;\n" +
+            "  optional bool key2 = 2;\n" +
+            "  optional double key3 = 3;\n" +
+            "  optional int32 key4 = 4;\n" +
             "  JsonObject key5 = 5;\n" +
             "\n" +
             "  message JsonObject {\n" +
-            "    int32 someNumber = 6;\n" +
+            "    optional int32 someNumber = 6;\n" +
             "    repeated int32 someArray = 7;\n" +
             "    NestedJsonObject someNestedObject = 8;\n" +
             "    message NestedJsonObject {\n" +
-            "       string key = 9;\n" +
+            "       optional string key = 9;\n" +
             "    }\n" +
             "  }\n" +
             "}";
 
-    protected Tenant savedTenant;
-    protected User tenantAdmin;
+    public static final String DEVICE_RPC_RESPONSE_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
+            "package rpc;\n" +
+            "\n" +
+            "message RpcResponseMsg {\n" +
+            "  optional string payload = 1;\n" +
+            "}";
+
+    public static final String DEVICE_RPC_REQUEST_PROTO_SCHEMA = "syntax =\"proto3\";\n" +
+            "package rpc;\n" +
+            "\n" +
+            "message RpcRequestMsg {\n" +
+            "  optional string method = 1;\n" +
+            "  optional int32 requestId = 2;\n" +
+            "  optional string params = 3;\n" +
+            "}";
 
     protected Device savedDevice;
     protected String accessToken;
 
     protected DeviceProfile deviceProfile;
-
-    protected void processAfterTest() throws Exception {
-        loginSysAdmin();
-        if (savedTenant != null) {
-            doDelete("/api/tenant/" + savedTenant.getId().getId().toString()).andExpect(status().isOk());
-        }
-    }
 
     protected List<TransportProtos.KeyValueProto> getKvProtos(List<String> expectedKeys) {
         List<TransportProtos.KeyValueProto> keyValueProtos = new ArrayList<>();

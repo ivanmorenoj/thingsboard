@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package org.thingsboard.server.dao.rule;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import org.thingsboard.server.common.data.exception.ThingsboardException;
+import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.id.TenantId;
@@ -27,20 +28,24 @@ import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainData;
 import org.thingsboard.server.common.data.rule.RuleChainImportResult;
 import org.thingsboard.server.common.data.rule.RuleChainMetaData;
+import org.thingsboard.server.common.data.rule.RuleChainType;
+import org.thingsboard.server.common.data.rule.RuleChainUpdateResult;
 import org.thingsboard.server.common.data.rule.RuleNode;
+import org.thingsboard.server.dao.entity.EntityDaoService;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
  * Created by igor on 3/12/18.
  */
-public interface RuleChainService {
+public interface RuleChainService extends EntityDaoService {
 
     RuleChain saveRuleChain(RuleChain ruleChain);
 
     boolean setRootRuleChain(TenantId tenantId, RuleChainId ruleChainId);
 
-    RuleChainMetaData saveRuleChainMetaData(TenantId tenantId, RuleChainMetaData ruleChainMetaData);
+    RuleChainUpdateResult saveRuleChainMetaData(TenantId tenantId, RuleChainMetaData ruleChainMetaData);
 
     RuleChainMetaData loadRuleChainMetaData(TenantId tenantId, RuleChainId ruleChainId);
 
@@ -60,7 +65,9 @@ public interface RuleChainService {
 
     List<EntityRelation> getRuleNodeRelations(TenantId tenantId, RuleNodeId ruleNodeId);
 
-    PageData<RuleChain> findTenantRuleChains(TenantId tenantId, PageLink pageLink);
+    PageData<RuleChain> findTenantRuleChainsByType(TenantId tenantId, RuleChainType type, PageLink pageLink);
+
+    Collection<RuleChain> findTenantRuleChainsByTypeAndName(TenantId tenantId, RuleChainType type, String name);
 
     void deleteRuleChainById(TenantId tenantId, RuleChainId ruleChainId);
 
@@ -69,5 +76,31 @@ public interface RuleChainService {
     RuleChainData exportTenantRuleChains(TenantId tenantId, PageLink pageLink) throws ThingsboardException;
 
     List<RuleChainImportResult> importTenantRuleChains(TenantId tenantId, RuleChainData ruleChainData, boolean overwrite);
+
+    RuleChain assignRuleChainToEdge(TenantId tenantId, RuleChainId ruleChainId, EdgeId edgeId);
+
+    RuleChain unassignRuleChainFromEdge(TenantId tenantId, RuleChainId ruleChainId, EdgeId edgeId, boolean remove);
+
+    PageData<RuleChain> findRuleChainsByTenantIdAndEdgeId(TenantId tenantId, EdgeId edgeId, PageLink pageLink);
+
+    RuleChain getEdgeTemplateRootRuleChain(TenantId tenantId);
+
+    boolean setEdgeTemplateRootRuleChain(TenantId tenantId, RuleChainId ruleChainId);
+
+    boolean setAutoAssignToEdgeRuleChain(TenantId tenantId, RuleChainId ruleChainId);
+
+    boolean unsetAutoAssignToEdgeRuleChain(TenantId tenantId, RuleChainId ruleChainId);
+
+    PageData<RuleChain> findAutoAssignToEdgeRuleChainsByTenantId(TenantId tenantId, PageLink pageLink);
+
+    List<RuleNode> findRuleNodesByTenantIdAndType(TenantId tenantId, String name, String toString);
+
+    List<RuleNode> findRuleNodesByTenantIdAndType(TenantId tenantId, String type);
+
+    PageData<RuleNode> findAllRuleNodesByType(String type, PageLink pageLink);
+
+    RuleNode saveRuleNode(TenantId tenantId, RuleNode ruleNode);
+
+    void deleteRuleNodes(TenantId tenantId, RuleChainId ruleChainId);
 
 }

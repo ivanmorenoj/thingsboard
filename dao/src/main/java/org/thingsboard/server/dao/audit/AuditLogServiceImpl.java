@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.HasName;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.alarm.AlarmComment;
 import org.thingsboard.server.common.data.audit.ActionStatus;
 import org.thingsboard.server.common.data.audit.ActionType;
 import org.thingsboard.server.common.data.audit.AuditLog;
@@ -47,9 +49,7 @@ import org.thingsboard.server.common.data.security.DeviceCredentials;
 import org.thingsboard.server.dao.audit.sink.AuditLogSink;
 import org.thingsboard.server.dao.device.provision.ProvisionRequest;
 import org.thingsboard.server.dao.entity.EntityService;
-import org.thingsboard.server.dao.exception.DataValidationException;
 import org.thingsboard.server.dao.service.DataValidator;
-import org.thingsboard.server.dao.util.mapping.JacksonUtil;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -79,6 +79,9 @@ public class AuditLogServiceImpl implements AuditLogService {
 
     @Autowired
     private AuditLogSink auditLogSink;
+
+    @Autowired
+    private DataValidator<AuditLog> auditLogValidator;
 
     @Override
     public PageData<AuditLog> findAuditLogsByTenantIdAndCustomerId(TenantId tenantId, CustomerId customerId, List<ActionType> actionTypes, TimePageLink pageLink) {
@@ -119,13 +122,13 @@ public class AuditLogServiceImpl implements AuditLogService {
             JsonNode actionData = constructActionData(entityId, entity, actionType, additionalInfo);
             ActionStatus actionStatus = ActionStatus.SUCCESS;
             String failureDetails = "";
-            String entityName = "";
+            String entityName = "N/A";
             if (entity != null) {
                 entityName = entity.getName();
             } else {
                 try {
-                    entityName = entityService.fetchEntityNameAsync(tenantId, entityId).get();
-                } catch (Exception ex) {
+                    entityName = entityService.fetchEntityName(tenantId, entityId).orElse(entityName);
+                } catch (Exception ignored) {
                 }
             }
             if (e != null) {
@@ -163,6 +166,8 @@ public class AuditLogServiceImpl implements AuditLogService {
             case UPDATED:
             case ALARM_ACK:
             case ALARM_CLEAR:
+            case ALARM_ASSIGNED:
+            case ALARM_UNASSIGNED:
             case RELATIONS_DELETED:
             case ASSIGNED_TO_TENANT:
                 if (entity != null) {
@@ -179,6 +184,12 @@ public class AuditLogServiceImpl implements AuditLogService {
                         actionData.set("metadata", ruleChainMetaDataNode);
                     }
                 }
+                break;
+            case ADDED_COMMENT:
+            case UPDATED_COMMENT:
+            case DELETED_COMMENT:
+                AlarmComment comment = extractParameter(AlarmComment.class, additionalInfo);
+                actionData.set("comment", comment.getComment());
                 break;
             case DELETED:
             case ACTIVATED:
@@ -255,10 +266,14 @@ public class AuditLogServiceImpl implements AuditLogService {
                 String browser = extractParameter(String.class, 1, additionalInfo);
                 String os = extractParameter(String.class, 2, additionalInfo);
                 String device = extractParameter(String.class, 3, additionalInfo);
+                String provider = extractParameter(String.class, 4, additionalInfo);
                 actionData.put("clientAddress", clientAddress);
                 actionData.put("browser", browser);
                 actionData.put("os", os);
                 actionData.put("device", device);
+                if (StringUtils.hasText(provider)) {
+                    actionData.put("provider", provider);
+                }
                 break;
             case PROVISION_SUCCESS:
             case PROVISION_FAILURE:
@@ -294,6 +309,22 @@ public class AuditLogServiceImpl implements AuditLogService {
                 }
                 actionData.put("startTs", extractParameter(Long.class, 1, additionalInfo));
                 actionData.put("endTs", extractParameter(Long.class, 2, additionalInfo));
+                break;
+            case ASSIGNED_TO_EDGE:
+                strEntityId = extractParameter(String.class, 0, additionalInfo);
+                String strEdgeId = extractParameter(String.class, 1, additionalInfo);
+                String strEdgeName = extractParameter(String.class, 2, additionalInfo);
+                actionData.put("entityId", strEntityId);
+                actionData.put("assignedEdgeId", strEdgeId);
+                actionData.put("assignedEdgeName", strEdgeName);
+                break;
+            case UNASSIGNED_FROM_EDGE:
+                strEntityId = extractParameter(String.class, 0, additionalInfo);
+                strEdgeId = extractParameter(String.class, 1, additionalInfo);
+                strEdgeName = extractParameter(String.class, 2, additionalInfo);
+                actionData.put("entityId", strEntityId);
+                actionData.put("unassignedEdgeId", strEdgeId);
+                actionData.put("unassignedEdgeName", strEdgeName);
                 break;
         }
         return actionData;
@@ -364,7 +395,15 @@ public class AuditLogServiceImpl implements AuditLogService {
         AuditLog auditLogEntry = createAuditLogEntry(tenantId, entityId, entityName, customerId, userId, userName,
                 actionType, actionData, actionStatus, actionFailureDetails);
         log.trace("Executing logAction [{}]", auditLogEntry);
-        auditLogValidator.validate(auditLogEntry, AuditLog::getTenantId);
+        try {
+            auditLogValidator.validate(auditLogEntry, AuditLog::getTenantId);
+        } catch (Exception e) {
+            if (StringUtils.contains(e.getMessage(), "is malformed")) {
+                auditLogEntry.setEntityName("MALFORMED");
+            } else {
+                return Futures.immediateFailedFuture(e);
+            }
+        }
         List<ListenableFuture<Void>> futures = Lists.newArrayListWithExpectedSize(INSERTS_PER_ENTRY);
         futures.add(auditLogDao.saveByTenantId(auditLogEntry));
 
@@ -373,19 +412,4 @@ public class AuditLogServiceImpl implements AuditLogService {
         return Futures.allAsList(futures);
     }
 
-    private DataValidator<AuditLog> auditLogValidator =
-            new DataValidator<AuditLog>() {
-                @Override
-                protected void validateDataImpl(TenantId tenantId, AuditLog auditLog) {
-                    if (auditLog.getEntityId() == null) {
-                        throw new DataValidationException("Entity Id should be specified!");
-                    }
-                    if (auditLog.getTenantId() == null) {
-                        throw new DataValidationException("Tenant Id should be specified!");
-                    }
-                    if (auditLog.getUserId() == null) {
-                        throw new DataValidationException("User Id should be specified!");
-                    }
-                }
-            };
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,29 +14,42 @@
 /// limitations under the License.
 ///
 
-import { Component, Input, OnDestroy, OnInit } from '@angular/core';
-import { BehaviorSubject, Subject } from 'rxjs';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Input, OnDestroy, OnInit } from '@angular/core';
+import { BehaviorSubject, Subject, Subscription } from 'rxjs';
 import { BreadCrumb, BreadCrumbConfig } from './breadcrumb';
 import { ActivatedRoute, ActivatedRouteSnapshot, NavigationEnd, Router } from '@angular/router';
-import { distinctUntilChanged, filter, map } from 'rxjs/operators';
+import { distinctUntilChanged, filter, map, tap } from 'rxjs/operators';
 import { TranslateService } from '@ngx-translate/core';
 import { guid } from '@core/utils';
+import { BroadcastService } from '@core/services/broadcast.service';
+import { ActiveComponentService } from '@core/services/active-component.service';
+import { UtilsService } from '@core/services/utils.service';
 
 @Component({
   selector: 'tb-breadcrumb',
   templateUrl: './breadcrumb.component.html',
-  styleUrls: ['./breadcrumb.component.scss']
+  styleUrls: ['./breadcrumb.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class BreadcrumbComponent implements OnInit, OnDestroy {
 
   activeComponentValue: any;
+  updateBreadcrumbsSubscription: Subscription = null;
 
-  @Input()
-  set activeComponent(activeComponent: any) {
+  setActiveComponent(activeComponent: any) {
+    if (this.updateBreadcrumbsSubscription) {
+      this.updateBreadcrumbsSubscription.unsubscribe();
+      this.updateBreadcrumbsSubscription = null;
+    }
     this.activeComponentValue = activeComponent;
+    if (this.activeComponentValue && this.activeComponentValue.updateBreadcrumbs) {
+      this.updateBreadcrumbsSubscription = this.activeComponentValue.updateBreadcrumbs.subscribe(() => {
+        this.breadcrumbs$.next(this.buildBreadCrumbs(this.activatedRoute.snapshot));
+      });
+    }
   }
 
-  breadcrumbs$: Subject<Array<BreadCrumb>> = new BehaviorSubject<Array<BreadCrumb>>(this.buildBreadCrumbs(this.activatedRoute.snapshot));
+  breadcrumbs$: Subject<Array<BreadCrumb>> = new BehaviorSubject<Array<BreadCrumb>>([]);
 
   routerEventsSubscription = this.router.events.pipe(
     filter((event) => event instanceof NavigationEnd ),
@@ -44,21 +57,34 @@ export class BreadcrumbComponent implements OnInit, OnDestroy {
     map( () => this.buildBreadCrumbs(this.activatedRoute.snapshot) )
   ).subscribe(breadcrumns => this.breadcrumbs$.next(breadcrumns) );
 
+  activeComponentSubscription = this.activeComponentService.onActiveComponentChanged().subscribe(comp => this.setActiveComponent(comp));
+
   lastBreadcrumb$ = this.breadcrumbs$.pipe(
     map( breadcrumbs => breadcrumbs[breadcrumbs.length - 1])
   );
 
   constructor(private router: Router,
               private activatedRoute: ActivatedRoute,
-              private translate: TranslateService) {
+              private broadcast: BroadcastService,
+              private activeComponentService: ActiveComponentService,
+              private cd: ChangeDetectorRef,
+              private translate: TranslateService,
+              public utils: UtilsService) {
   }
 
   ngOnInit(): void {
+    this.broadcast.on('updateBreadcrumb', () => {
+      this.cd.markForCheck();
+    });
+    this.setActiveComponent(this.activeComponentService.getCurrentActiveComponent());
   }
 
   ngOnDestroy(): void {
     if (this.routerEventsSubscription) {
       this.routerEventsSubscription.unsubscribe();
+    }
+    if (this.activeComponentSubscription) {
+      this.activeComponentSubscription.unsubscribe();
     }
   }
 
@@ -83,9 +109,8 @@ export class BreadcrumbComponent implements OnInit, OnDestroy {
         let labelFunction;
         let ignoreTranslate;
         if (breadcrumbConfig.labelFunction) {
-          labelFunction = () => {
-            return breadcrumbConfig.labelFunction(route, this.translate, this.activeComponentValue, lastChild.data);
-          };
+          labelFunction = () => this.activeComponentValue ?
+            breadcrumbConfig.labelFunction(route, this.translate, this.activeComponentValue, lastChild.data) : breadcrumbConfig.label;
           ignoreTranslate = true;
         } else {
           label = breadcrumbConfig.label || 'home.home';

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package org.thingsboard.server.transport.coap.adaptors;
 
 import com.google.protobuf.Descriptors;
+import com.google.protobuf.DynamicMessage;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.thingsboard.server.common.transport.adaptor.AdaptorException;
@@ -32,7 +33,7 @@ public interface CoapTransportAdaptor {
 
     TransportProtos.GetAttributeRequestMsg convertToGetAttributes(UUID sessionId, Request inbound) throws AdaptorException;
 
-    TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound) throws AdaptorException;
+    TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound, Descriptors.Descriptor rpcResponseMsgDescriptor) throws AdaptorException;
 
     TransportProtos.ToServerRpcRequestMsg convertToServerRpcRequest(UUID sessionId, Request inbound) throws AdaptorException;
 
@@ -40,12 +41,14 @@ public interface CoapTransportAdaptor {
 
     Response convertToPublish(TransportProtos.GetAttributeResponseMsg responseMsg) throws AdaptorException;
 
-    Response convertToPublish(boolean isConfirmable, TransportProtos.AttributeUpdateNotificationMsg notificationMsg) throws AdaptorException;
+    Response convertToPublish(TransportProtos.AttributeUpdateNotificationMsg notificationMsg) throws AdaptorException;
 
-    Response convertToPublish(boolean isConfirmable, TransportProtos.ToDeviceRpcRequestMsg rpcRequest) throws AdaptorException;
+    Response convertToPublish(TransportProtos.ToDeviceRpcRequestMsg rpcRequest, DynamicMessage.Builder rpcRequestDynamicMessageBuilder) throws AdaptorException;
 
     Response convertToPublish(TransportProtos.ToServerRpcResponseMsg msg) throws AdaptorException;
 
     ProvisionDeviceRequestMsg convertToProvisionRequestMsg(UUID sessionId, Request inbound) throws AdaptorException;
+
+    int getContentFormat();
 
 }

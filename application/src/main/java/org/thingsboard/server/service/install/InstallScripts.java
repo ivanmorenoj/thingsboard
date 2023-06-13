@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,20 +20,22 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.Dashboard;
+import org.thingsboard.server.common.data.ResourceType;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.TbResource;
+import org.thingsboard.server.common.data.exception.ThingsboardException;
 import org.thingsboard.server.common.data.id.CustomerId;
-import org.thingsboard.server.common.data.id.EntityId;
-import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.oauth2.OAuth2ClientRegistrationTemplate;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainMetaData;
-import org.thingsboard.server.common.data.widget.WidgetType;
 import org.thingsboard.server.common.data.widget.WidgetTypeDetails;
 import org.thingsboard.server.common.data.widget.WidgetsBundle;
 import org.thingsboard.server.dao.dashboard.DashboardService;
+import org.thingsboard.server.dao.exception.DataValidationException;
 import org.thingsboard.server.dao.oauth2.OAuth2ConfigTemplateService;
+import org.thingsboard.server.dao.resource.ResourceService;
 import org.thingsboard.server.dao.rule.RuleChainService;
 import org.thingsboard.server.dao.widget.WidgetTypeService;
 import org.thingsboard.server.dao.widget.WidgetsBundleService;
@@ -43,9 +45,11 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Base64;
 import java.util.Optional;
 
 import static org.thingsboard.server.service.install.DatabaseHelper.objectMapper;
+import static org.thingsboard.server.utils.LwM2mObjectModelUtils.toLwm2mResource;
 
 /**
  * Created by ashvayka on 18.04.18.
@@ -61,14 +65,18 @@ public class InstallScripts {
     public static final String JSON_DIR = "json";
     public static final String SYSTEM_DIR = "system";
     public static final String TENANT_DIR = "tenant";
+    public static final String EDGE_DIR = "edge";
     public static final String DEVICE_PROFILE_DIR = "device_profile";
     public static final String DEMO_DIR = "demo";
     public static final String RULE_CHAINS_DIR = "rule_chains";
     public static final String WIDGET_BUNDLES_DIR = "widget_bundles";
     public static final String OAUTH2_CONFIG_TEMPLATES_DIR = "oauth2_config_templates";
     public static final String DASHBOARDS_DIR = "dashboards";
+    public static final String MODELS_LWM2M_DIR = "lwm2m-registry";
+    public static final String CREDENTIALS_DIR = "credentials";
 
     public static final String JSON_EXT = ".json";
+    public static final String XML_EXT = ".xml";
 
     @Value("${install.data_dir:}")
     private String dataDir;
@@ -88,12 +96,19 @@ public class InstallScripts {
     @Autowired
     private OAuth2ConfigTemplateService oAuth2TemplateService;
 
-    public Path getTenantRuleChainsDir() {
+    @Autowired
+    private ResourceService resourceService;
+
+    private Path getTenantRuleChainsDir() {
         return Paths.get(getDataDir(), JSON_DIR, TENANT_DIR, RULE_CHAINS_DIR);
     }
 
-    public Path getDeviceProfileDefaultRuleChainTemplateFilePath() {
+    private Path getDeviceProfileDefaultRuleChainTemplateFilePath() {
         return Paths.get(getDataDir(), JSON_DIR, TENANT_DIR, DEVICE_PROFILE_DIR, "rule_chain_template.json");
+    }
+
+    private Path getEdgeRuleChainsDir() {
+        return Paths.get(getDataDir(), JSON_DIR, EDGE_DIR, RULE_CHAINS_DIR);
     }
 
     public String getDataDir() {
@@ -119,7 +134,16 @@ public class InstallScripts {
 
     public void createDefaultRuleChains(TenantId tenantId) throws IOException {
         Path tenantChainsDir = getTenantRuleChainsDir();
-        try (DirectoryStream<Path> dirStream = Files.newDirectoryStream(tenantChainsDir, path -> path.toString().endsWith(InstallScripts.JSON_EXT))) {
+        loadRuleChainsFromPath(tenantId, tenantChainsDir);
+    }
+
+    public void createDefaultEdgeRuleChains(TenantId tenantId) throws IOException {
+        Path edgeChainsDir = getEdgeRuleChainsDir();
+        loadRuleChainsFromPath(tenantId, edgeChainsDir);
+    }
+
+    private void loadRuleChainsFromPath(TenantId tenantId, Path ruleChainsPath) throws IOException {
+        try (DirectoryStream<Path> dirStream = Files.newDirectoryStream(ruleChainsPath, path -> path.toString().endsWith(InstallScripts.JSON_EXT))) {
             dirStream.forEach(
                     path -> {
                         try {
@@ -149,11 +173,10 @@ public class InstallScripts {
         ruleChain = ruleChainService.saveRuleChain(ruleChain);
 
         ruleChainMetaData.setRuleChainId(ruleChain.getId());
-        ruleChainService.saveRuleChainMetaData(new TenantId(EntityId.NULL_UUID), ruleChainMetaData);
+        ruleChainService.saveRuleChainMetaData(TenantId.SYS_TENANT_ID, ruleChainMetaData);
 
         return ruleChain;
     }
-
 
     public void loadSystemWidgets() throws Exception {
         Path widgetBundlesDir = Paths.get(getDataDir(), JSON_DIR, SYSTEM_DIR, WIDGET_BUNDLES_DIR);
@@ -198,7 +221,7 @@ public class InstallScripts {
                             dashboard.setTenantId(tenantId);
                             Dashboard savedDashboard = dashboardService.saveDashboard(dashboard);
                             if (customerId != null && !customerId.isNullUid()) {
-                                dashboardService.assignDashboardToCustomer(new TenantId(EntityId.NULL_UUID), savedDashboard.getId(), customerId);
+                                dashboardService.assignDashboardToCustomer(TenantId.SYS_TENANT_ID, savedDashboard.getId(), customerId);
                             }
                         } catch (Exception e) {
                             log.error("Unable to load dashboard from json: [{}]", path.toString());
@@ -209,14 +232,14 @@ public class InstallScripts {
         }
     }
 
-
-    public void loadDemoRuleChains(TenantId tenantId) throws Exception {
+    public void loadDemoRuleChains(TenantId tenantId) {
         try {
             createDefaultRuleChains(tenantId);
             createDefaultRuleChain(tenantId, "Thermostat");
+            createDefaultEdgeRuleChains(tenantId);
         } catch (Exception e) {
-            log.error("Unable to load dashboard from json", e);
-            throw new RuntimeException("Unable to load dashboard from json", e);
+            log.error("Unable to load rule chain from json", e);
+            throw new RuntimeException("Unable to load rule chain from json", e);
         }
     }
 
@@ -242,4 +265,43 @@ public class InstallScripts {
             );
         }
     }
+
+    public void loadSystemLwm2mResources() {
+        Path resourceLwm2mPath = Paths.get(dataDir, MODELS_LWM2M_DIR);
+        try (DirectoryStream<Path> dirStream = Files.newDirectoryStream(resourceLwm2mPath, path -> path.toString().endsWith(InstallScripts.XML_EXT))) {
+            dirStream.forEach(
+                    path -> {
+                        try {
+                            String data = Base64.getEncoder().encodeToString(Files.readAllBytes(path));
+                            TbResource tbResource = new TbResource();
+                            tbResource.setTenantId(TenantId.SYS_TENANT_ID);
+                            tbResource.setData(data);
+                            tbResource.setResourceType(ResourceType.LWM2M_MODEL);
+                            tbResource.setFileName(path.toFile().getName());
+                            doSaveLwm2mResource(tbResource);
+                        } catch (Exception e) {
+                            log.error("Unable to load resource lwm2m object model from file: [{}]", path.toString());
+                            throw new RuntimeException("resource lwm2m object model from file", e);
+                        }
+                    }
+            );
+        } catch (Exception e) {
+            log.error("Unable to load resources lwm2m object model from file: [{}]", resourceLwm2mPath.toString());
+            throw new RuntimeException("resource lwm2m object model from file", e);
+        }
+    }
+
+    private void doSaveLwm2mResource(TbResource resource) throws ThingsboardException {
+        log.trace("Executing saveResource [{}]", resource);
+        if (StringUtils.isEmpty(resource.getData())) {
+            throw new DataValidationException("Resource data should be specified!");
+        }
+        toLwm2mResource(resource);
+        TbResource foundResource =
+                resourceService.getResource(TenantId.SYS_TENANT_ID, ResourceType.LWM2M_MODEL, resource.getResourceKey());
+        if (foundResource == null) {
+            resourceService.saveResource(resource);
+        }
+    }
 }
+

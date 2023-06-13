@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,13 @@ package org.thingsboard.server.service.script;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
-import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.script.api.RuleNodeScriptFactory;
+import org.thingsboard.script.api.js.JsInvokeService;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
@@ -32,226 +31,122 @@ import org.thingsboard.server.common.msg.TbMsgMetaData;
 import javax.script.ScriptException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ExecutionException;
 
 
 @Slf4j
-public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.ScriptEngine {
+public class RuleNodeJsScriptEngine extends RuleNodeScriptEngine<JsInvokeService, JsonNode> {
 
-    private static final ObjectMapper mapper = new ObjectMapper();
-    private final JsInvokeService sandboxService;
-
-    private final UUID scriptId;
-    private final TenantId tenantId;
-    private final EntityId entityId;
-
-    public RuleNodeJsScriptEngine(TenantId tenantId, JsInvokeService sandboxService, EntityId entityId, String script, String... argNames) {
-        this.tenantId = tenantId;
-        this.sandboxService = sandboxService;
-        this.entityId = entityId;
-        try {
-            this.scriptId = this.sandboxService.eval(tenantId, JsScriptType.RULE_NODE_SCRIPT, script, argNames).get();
-        } catch (Exception e) {
-            Throwable t = e;
-            if (e instanceof ExecutionException) {
-                t = e.getCause();
-            }
-            throw new IllegalArgumentException("Can't compile script: " + t.getMessage(), t);
-        }
-    }
-
-    private static String[] prepareArgs(TbMsg msg) {
-        try {
-            String[] args = new String[3];
-            if (msg.getData() != null) {
-                args[0] = msg.getData();
-            } else {
-                args[0] = "";
-            }
-            args[1] = mapper.writeValueAsString(msg.getMetaData().getData());
-            args[2] = msg.getType();
-            return args;
-        } catch (Throwable th) {
-            throw new IllegalArgumentException("Cannot bind js args", th);
-        }
-    }
-
-    private static TbMsg unbindMsg(JsonNode msgData, TbMsg msg) {
-        try {
-            String data = null;
-            Map<String, String> metadata = null;
-            String messageType = null;
-            if (msgData.has(RuleNodeScriptFactory.MSG)) {
-                JsonNode msgPayload = msgData.get(RuleNodeScriptFactory.MSG);
-                data = mapper.writeValueAsString(msgPayload);
-            }
-            if (msgData.has(RuleNodeScriptFactory.METADATA)) {
-                JsonNode msgMetadata = msgData.get(RuleNodeScriptFactory.METADATA);
-                metadata = mapper.convertValue(msgMetadata, new TypeReference<Map<String, String>>() {
-                });
-            }
-            if (msgData.has(RuleNodeScriptFactory.MSG_TYPE)) {
-                messageType = msgData.get(RuleNodeScriptFactory.MSG_TYPE).asText();
-            }
-            String newData = data != null ? data : msg.getData();
-            TbMsgMetaData newMetadata = metadata != null ? new TbMsgMetaData(metadata) : msg.getMetaData().copy();
-            String newMessageType = !StringUtils.isEmpty(messageType) ? messageType : msg.getType();
-            return TbMsg.transformMsg(msg, newMessageType, msg.getOriginator(), newMetadata, newData);
-        } catch (Throwable th) {
-            th.printStackTrace();
-            throw new RuntimeException("Failed to unbind message data from javascript result", th);
-        }
+    public RuleNodeJsScriptEngine(TenantId tenantId, JsInvokeService scriptInvokeService, String script, String... argNames) {
+        super(tenantId, scriptInvokeService, script, argNames);
     }
 
     @Override
-    public List<TbMsg> executeUpdate(TbMsg msg) throws ScriptException {
-        JsonNode result = executeScript(msg);
-        if (result.isObject()) {
-            return Collections.singletonList(unbindMsg(result, msg));
-        } else if (result.isArray()){
-            List<TbMsg> res = new ArrayList<>(result.size());
-            result.forEach(jsonObject -> res.add(unbindMsg(jsonObject, msg)));
-            return res;
-        } else {
-            log.warn("Wrong result type: {}", result.getNodeType());
-            throw new ScriptException("Wrong result type: " + result.getNodeType());
-        }
-    }
-
-    @Override
-    public ListenableFuture<List<TbMsg>> executeUpdateAsync(TbMsg msg) {
-        ListenableFuture<JsonNode> result = executeScriptAsync(msg);
-        return Futures.transformAsync(result, json -> {
-            if (json.isObject()) {
-                return Futures.immediateFuture(Collections.singletonList(unbindMsg(json, msg)));
-            } else if (json.isArray()){
-                List<TbMsg> res = new ArrayList<>(json.size());
-                json.forEach(jsonObject -> res.add(unbindMsg(jsonObject, msg)));
-                return Futures.immediateFuture(res);
-            }
-            else{
-                log.warn("Wrong result type: {}", json.getNodeType());
-                return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + json.getNodeType()));
-            }
-        }, MoreExecutors.directExecutor());
-    }
-
-    @Override
-    public TbMsg executeGenerate(TbMsg prevMsg) throws ScriptException {
-        JsonNode result = executeScript(prevMsg);
-        if (!result.isObject()) {
-            log.warn("Wrong result type: {}", result.getNodeType());
-            throw new ScriptException("Wrong result type: " + result.getNodeType());
-        }
-        return unbindMsg(result, prevMsg);
-    }
-
-    @Override
-    public JsonNode executeJson(TbMsg msg) throws ScriptException {
-        return executeScript(msg);
-    }
-
-    @Override
-    public ListenableFuture<JsonNode> executeJsonAsync(TbMsg msg) throws ScriptException {
+    public ListenableFuture<JsonNode> executeJsonAsync(TbMsg msg) {
         return executeScriptAsync(msg);
     }
 
     @Override
-    public String executeToString(TbMsg msg) throws ScriptException {
-        JsonNode result = executeScript(msg);
-        if (!result.isTextual()) {
-            log.warn("Wrong result type: {}", result.getNodeType());
-            throw new ScriptException("Wrong result type: " + result.getNodeType());
+    protected ListenableFuture<List<TbMsg>> executeUpdateTransform(TbMsg msg, JsonNode json) {
+        if (json.isObject()) {
+            return Futures.immediateFuture(Collections.singletonList(unbindMsg(json, msg)));
+        } else if (json.isArray()) {
+            List<TbMsg> res = new ArrayList<>(json.size());
+            json.forEach(jsonObject -> res.add(unbindMsg(jsonObject, msg)));
+            return Futures.immediateFuture(res);
         }
-        return result.asText();
+        log.warn("Wrong result type: {}", json.getNodeType());
+        return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + json.getNodeType()));
     }
 
     @Override
-    public boolean executeFilter(TbMsg msg) throws ScriptException {
-        JsonNode result = executeScript(msg);
-        if (!result.isBoolean()) {
+    protected ListenableFuture<TbMsg> executeGenerateTransform(TbMsg prevMsg, JsonNode result) {
+        if (!result.isObject()) {
             log.warn("Wrong result type: {}", result.getNodeType());
-            throw new ScriptException("Wrong result type: " + result.getNodeType());
+            Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + result.getNodeType()));
         }
-        return result.asBoolean();
+        return Futures.immediateFuture(unbindMsg(result, prevMsg));
     }
 
     @Override
-    public ListenableFuture<Boolean> executeFilterAsync(TbMsg msg) {
-        ListenableFuture<JsonNode> result = executeScriptAsync(msg);
-        return Futures.transformAsync(result, json -> {
-            if (!json.isBoolean()) {
-                log.warn("Wrong result type: {}", json.getNodeType());
-                return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + json.getNodeType()));
-            } else {
-                return Futures.immediateFuture(json.asBoolean());
-            }
-        }, MoreExecutors.directExecutor());
+    protected JsonNode convertResult(Object result) {
+        return JacksonUtil.toJsonNode(result != null ? result.toString() : null);
     }
 
     @Override
-    public Set<String> executeSwitch(TbMsg msg) throws ScriptException {
-        JsonNode result = executeScript(msg);
+    protected ListenableFuture<String> executeToStringTransform(JsonNode result) {
         if (result.isTextual()) {
-            return Collections.singleton(result.asText());
-        } else if (result.isArray()) {
-            Set<String> nextStates = Sets.newHashSet();
+            return Futures.immediateFuture(result.asText());
+        }
+        log.warn("Wrong result type: {}", result.getNodeType());
+        return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + result.getNodeType()));
+    }
+
+    @Override
+    protected ListenableFuture<Boolean> executeFilterTransform(JsonNode json) {
+        if (json.isBoolean()) {
+            return Futures.immediateFuture(json.asBoolean());
+        }
+        log.warn("Wrong result type: {}", json.getNodeType());
+        return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + json.getNodeType()));
+    }
+
+    @Override
+    protected ListenableFuture<Set<String>> executeSwitchTransform(JsonNode result) {
+        if (result.isTextual()) {
+            return Futures.immediateFuture(Collections.singleton(result.asText()));
+        }
+        if (result.isArray()) {
+            Set<String> nextStates = new HashSet<>();
             for (JsonNode val : result) {
                 if (!val.isTextual()) {
                     log.warn("Wrong result type: {}", val.getNodeType());
-                    throw new ScriptException("Wrong result type: " + val.getNodeType());
+                    return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + val.getNodeType()));
                 } else {
                     nextStates.add(val.asText());
                 }
             }
-            return nextStates;
+            return Futures.immediateFuture(nextStates);
+        }
+        log.warn("Wrong result type: {}", result.getNodeType());
+        return Futures.immediateFailedFuture(new ScriptException("Wrong result type: " + result.getNodeType()));
+    }
+
+    @Override
+    protected Object[] prepareArgs(TbMsg msg) {
+        String[] args = new String[3];
+        if (msg.getData() != null) {
+            args[0] = msg.getData();
         } else {
-            log.warn("Wrong result type: {}", result.getNodeType());
-            throw new ScriptException("Wrong result type: " + result.getNodeType());
+            args[0] = "";
         }
+        args[1] = JacksonUtil.toString(msg.getMetaData().getData());
+        args[2] = msg.getType();
+        return args;
     }
 
-    private JsonNode executeScript(TbMsg msg) throws ScriptException {
-        try {
-            String[] inArgs = prepareArgs(msg);
-            String eval = sandboxService.invokeFunction(tenantId, this.scriptId, inArgs[0], inArgs[1], inArgs[2]).get().toString();
-            return mapper.readTree(eval);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof ScriptException) {
-                throw (ScriptException) e.getCause();
-            } else if (e.getCause() instanceof RuntimeException) {
-                throw new ScriptException(e.getCause().getMessage());
-            } else {
-                throw new ScriptException(e);
-            }
-        } catch (Exception e) {
-            throw new ScriptException(e);
+    private static TbMsg unbindMsg(JsonNode msgData, TbMsg msg) {
+        String data = null;
+        Map<String, String> metadata = null;
+        String messageType = null;
+        if (msgData.has(RuleNodeScriptFactory.MSG)) {
+            JsonNode msgPayload = msgData.get(RuleNodeScriptFactory.MSG);
+            data = JacksonUtil.toString(msgPayload);
         }
-    }
-
-    private ListenableFuture<JsonNode> executeScriptAsync(TbMsg msg) {
-        String[] inArgs = prepareArgs(msg);
-        return Futures.transformAsync(sandboxService.invokeFunction(tenantId, this.scriptId, inArgs[0], inArgs[1], inArgs[2]),
-                o -> {
-                    try {
-                        return Futures.immediateFuture(mapper.readTree(o.toString()));
-                    } catch (Exception e) {
-                        if (e.getCause() instanceof ScriptException) {
-                            return Futures.immediateFailedFuture(e.getCause());
-                        } else if (e.getCause() instanceof RuntimeException) {
-                            return Futures.immediateFailedFuture(new ScriptException(e.getCause().getMessage()));
-                        } else {
-                            return Futures.immediateFailedFuture(new ScriptException(e));
-                        }
-                    }
-                }, MoreExecutors.directExecutor());
-    }
-
-    public void destroy() {
-        sandboxService.release(this.scriptId);
+        if (msgData.has(RuleNodeScriptFactory.METADATA)) {
+            JsonNode msgMetadata = msgData.get(RuleNodeScriptFactory.METADATA);
+            metadata = JacksonUtil.convertValue(msgMetadata, new TypeReference<>() {
+            });
+        }
+        if (msgData.has(RuleNodeScriptFactory.MSG_TYPE)) {
+            messageType = msgData.get(RuleNodeScriptFactory.MSG_TYPE).asText();
+        }
+        String newData = data != null ? data : msg.getData();
+        TbMsgMetaData newMetadata = metadata != null ? new TbMsgMetaData(metadata) : msg.getMetaData().copy();
+        String newMessageType = !StringUtils.isEmpty(messageType) ? messageType : msg.getType();
+        return TbMsg.transformMsg(msg, newMessageType, msg.getOriginator(), newMetadata, newData);
     }
 }

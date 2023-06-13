@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,19 +17,20 @@
 import { Component, EventEmitter, forwardRef, Input, OnInit, Output } from '@angular/core';
 import {
   ControlValueAccessor,
-  FormBuilder,
-  FormControl,
-  FormGroup,
+  UntypedFormBuilder,
+  UntypedFormControl,
+  UntypedFormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
   Validator,
   Validators
 } from '@angular/forms';
-import { AlarmRule, DeviceProfileAlarm, deviceProfileAlarmValidator } from '@shared/models/device.models';
+import { DeviceProfileAlarmRule, DeviceProfileAlarm, deviceProfileAlarmValidator } from '@shared/models/device.models';
 import { MatDialog } from '@angular/material/dialog';
 import { COMMA, ENTER, SEMICOLON } from '@angular/cdk/keycodes';
 import { MatChipInputEvent } from '@angular/material/chips';
 import { EntityId } from '@shared/models/id/entity-id';
+import { UtilsService } from '@core/services/utils.service';
 
 @Component({
   selector: 'tb-device-profile-alarm',
@@ -66,13 +67,14 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
 
   private modelValue: DeviceProfileAlarm;
 
-  alarmFormGroup: FormGroup;
+  alarmFormGroup: UntypedFormGroup;
 
   private propagateChange = null;
   private propagateChangePending = false;
 
   constructor(private dialog: MatDialog,
-              private fb: FormBuilder) {
+              private utils: UtilsService,
+              private fb: UntypedFormBuilder) {
   }
 
   registerOnChange(fn: any): void {
@@ -91,11 +93,13 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
   ngOnInit() {
     this.alarmFormGroup = this.fb.group({
       id: [null, Validators.required],
-      alarmType: [null, Validators.required],
+      alarmType: [null, [Validators.required, Validators.maxLength(255)]],
       createRules: [null],
       clearRule: [null],
       propagate: [null],
-      propagateRelationTypes: [null]
+      propagateRelationTypes: [null],
+      propagateToOwner: [null],
+      propagateToTenant: [null]
     }, { validators: deviceProfileAlarmValidator });
     this.alarmFormGroup.valueChanges.subscribe(() => {
       this.updateModel();
@@ -124,7 +128,7 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
   }
 
   public addClearAlarmRule() {
-    const clearAlarmRule: AlarmRule = {
+    const clearAlarmRule: DeviceProfileAlarmRule = {
       condition: {
         condition: []
       }
@@ -136,7 +140,7 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
     this.alarmFormGroup.patchValue({clearRule: null});
   }
 
-  public validate(c: FormControl) {
+  public validate(c: UntypedFormControl) {
     if (c.parent) {
       const alarmType = c.value.alarmType;
       const profileAlarmsType = [];
@@ -167,7 +171,7 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
   }
 
   addRelationType(event: MatChipInputEvent): void {
-    const input = event.input;
+    const input = event.chipInput.inputElement;
     let value = event.value;
     if ((value || '').trim()) {
       value = value.trim();
@@ -185,6 +189,10 @@ export class DeviceProfileAlarmComponent implements ControlValueAccessor, OnInit
     }
   }
 
+  get alarmTypeTitle(): string {
+    const alarmType = this.alarmFormGroup.get('alarmType').value;
+    return this.utils.customTranslation(alarmType, alarmType);
+  }
 
   private updateModel() {
     const value = this.alarmFormGroup.value;

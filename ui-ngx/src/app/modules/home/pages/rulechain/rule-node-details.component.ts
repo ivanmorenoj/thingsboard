@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -18,13 +18,15 @@ import { Component, Input, OnChanges, OnInit, SimpleChanges, ViewChild } from '@
 import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import { FcRuleNode, RuleNodeType } from '@shared/models/rule-node.models';
 import { EntityType } from '@shared/models/entity-type.models';
 import { Subscription } from 'rxjs';
 import { RuleChainService } from '@core/http/rule-chain.service';
 import { RuleNodeConfigComponent } from './rule-node-config.component';
 import { Router } from '@angular/router';
+import { RuleChainType } from '@app/shared/models/rule-chain.models';
+import { ComponentClusteringMode } from '@shared/models/component-descriptor.models';
 
 @Component({
   selector: 'tb-rule-node',
@@ -42,6 +44,9 @@ export class RuleNodeDetailsComponent extends PageComponent implements OnInit, O
   ruleChainId: string;
 
   @Input()
+  ruleChainType: RuleChainType;
+
+  @Input()
   isEdit: boolean;
 
   @Input()
@@ -53,12 +58,12 @@ export class RuleNodeDetailsComponent extends PageComponent implements OnInit, O
   ruleNodeType = RuleNodeType;
   entityType = EntityType;
 
-  ruleNodeFormGroup: FormGroup;
+  ruleNodeFormGroup: UntypedFormGroup;
 
   private ruleNodeFormSubscription: Subscription;
 
   constructor(protected store: Store<AppState>,
-              private fb: FormBuilder,
+              private fb: UntypedFormBuilder,
               private ruleChainService: RuleChainService,
               private router: Router) {
     super(store);
@@ -71,28 +76,17 @@ export class RuleNodeDetailsComponent extends PageComponent implements OnInit, O
       this.ruleNodeFormSubscription = null;
     }
     if (this.ruleNode) {
-      if (this.ruleNode.component.type !== RuleNodeType.RULE_CHAIN) {
-
-        this.ruleNodeFormGroup = this.fb.group({
-          name: [this.ruleNode.name, [Validators.required, Validators.pattern('(.|\\s)*\\S(.|\\s)*')]],
-          debugMode: [this.ruleNode.debugMode, []],
-          configuration: [this.ruleNode.configuration, [Validators.required]],
-          additionalInfo: this.fb.group(
-            {
-              description: [this.ruleNode.additionalInfo ? this.ruleNode.additionalInfo.description : ''],
-            }
-          )
-        });
-      } else {
-        this.ruleNodeFormGroup = this.fb.group({
-          targetRuleChainId: [this.ruleNode.targetRuleChainId, [Validators.required]],
-          additionalInfo: this.fb.group(
-            {
-              description: [this.ruleNode.additionalInfo ? this.ruleNode.additionalInfo.description : ''],
-            }
-          )
-        });
-      }
+      this.ruleNodeFormGroup = this.fb.group({
+        name: [this.ruleNode.name, [Validators.required, Validators.pattern('(.|\\s)*\\S(.|\\s)*'), Validators.maxLength(255)]],
+        debugMode: [this.ruleNode.debugMode, []],
+        singletonMode: [this.ruleNode.singletonMode, []],
+        configuration: [this.ruleNode.configuration, [Validators.required]],
+        additionalInfo: this.fb.group(
+          {
+            description: [this.ruleNode.additionalInfo ? this.ruleNode.additionalInfo.description : ''],
+          }
+        )
+      });
       this.ruleNodeFormSubscription = this.ruleNodeFormGroup.valueChanges.subscribe(() => {
         this.updateRuleNode();
       });
@@ -103,23 +97,8 @@ export class RuleNodeDetailsComponent extends PageComponent implements OnInit, O
 
   private updateRuleNode() {
     const formValue = this.ruleNodeFormGroup.value || {};
-
-    if (this.ruleNode.component.type === RuleNodeType.RULE_CHAIN) {
-      const targetRuleChainId: string = formValue.targetRuleChainId;
-      if (this.ruleNode.targetRuleChainId !== targetRuleChainId && targetRuleChainId) {
-        this.ruleChainService.getRuleChain(targetRuleChainId).subscribe(
-          (ruleChain) => {
-            this.ruleNode.name = ruleChain.name;
-            Object.assign(this.ruleNode, formValue);
-          }
-        );
-      } else {
-        Object.assign(this.ruleNode, formValue);
-      }
-    } else {
-      formValue.name = formValue.name.trim();
-      Object.assign(this.ruleNode, formValue);
-    }
+    formValue.name = formValue.name.trim();
+    Object.assign(this.ruleNode, formValue);
   }
 
   ngOnInit(): void {
@@ -137,17 +116,24 @@ export class RuleNodeDetailsComponent extends PageComponent implements OnInit, O
   }
 
   validate() {
-    if (this.ruleNode.component.type !== RuleNodeType.RULE_CHAIN) {
-      this.ruleNodeConfigComponent.validate();
-    }
+    this.ruleNodeConfigComponent.validate();
   }
 
   openRuleChain($event: Event) {
     if ($event) {
       $event.stopPropagation();
     }
-    if (this.ruleNode.targetRuleChainId) {
-      this.router.navigateByUrl(`/ruleChains/${this.ruleNode.targetRuleChainId}`);
+    const ruleChainId = this.ruleNodeFormGroup.get('configuration')?.value?.ruleChainId;
+    if (ruleChainId) {
+      if (this.ruleChainType === RuleChainType.EDGE) {
+        this.router.navigateByUrl(`/edgeManagement/ruleChains/${ruleChainId}`);
+      } else {
+        this.router.navigateByUrl(`/ruleChains/${ruleChainId}`);
+      }
     }
+  }
+
+  isSingletonEditAllowed() {
+    return this.ruleNode.component.clusteringMode === ComponentClusteringMode.USER_PREFERENCE;
   }
 }

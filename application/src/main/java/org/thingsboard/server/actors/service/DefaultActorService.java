@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +19,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
+import org.thingsboard.common.util.ThingsBoardExecutors;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
 import org.thingsboard.server.actors.ActorSystemContext;
 import org.thingsboard.server.actors.DefaultTbActorSystem;
-import org.thingsboard.server.actors.TbActorId;
 import org.thingsboard.server.actors.TbActorRef;
 import org.thingsboard.server.actors.TbActorSystem;
 import org.thingsboard.server.actors.TbActorSystemSettings;
@@ -33,14 +31,14 @@ import org.thingsboard.server.actors.app.AppActor;
 import org.thingsboard.server.actors.app.AppInitMsg;
 import org.thingsboard.server.actors.stats.StatsActor;
 import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
-import org.thingsboard.server.queue.discovery.PartitionChangeEvent;
 import org.thingsboard.server.queue.discovery.TbApplicationEventListener;
+import org.thingsboard.server.queue.discovery.event.PartitionChangeEvent;
+import org.thingsboard.server.queue.util.AfterStartUp;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 
 @Service
 @Slf4j
@@ -110,12 +108,11 @@ public class DefaultActorService extends TbApplicationEventListener<PartitionCha
         if (poolSize == 1) {
             return Executors.newSingleThreadExecutor(ThingsBoardThreadFactory.forName(dispatcherName));
         } else {
-            return Executors.newWorkStealingPool(poolSize);
+            return ThingsBoardExecutors.newWorkStealingPool(poolSize, dispatcherName);
         }
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    @Order(value = 2)
+    @AfterStartUp(order = AfterStartUp.ACTOR_SYSTEM)
     public void onApplicationEvent(ApplicationReadyEvent applicationReadyEvent) {
         log.info("Received application ready event. Sending application init message to actor system");
         appActor.tellWithHighPriority(new AppInitMsg());
@@ -124,7 +121,7 @@ public class DefaultActorService extends TbApplicationEventListener<PartitionCha
     @Override
     protected void onTbApplicationEvent(PartitionChangeEvent event) {
         log.info("Received partition change event.");
-        this.appActor.tellWithHighPriority(new PartitionChangeMsg(event.getServiceQueueKey(), event.getPartitions()));
+        this.appActor.tellWithHighPriority(new PartitionChangeMsg(event.getQueueKey().getType(), event.getPartitions()));
     }
 
     @PreDestroy

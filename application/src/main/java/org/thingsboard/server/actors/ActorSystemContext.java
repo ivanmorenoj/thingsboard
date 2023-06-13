@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,7 @@
  */
 package org.thingsboard.server.actors;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -32,12 +30,19 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.thingsboard.rule.engine.api.MailService;
+import org.thingsboard.rule.engine.api.NotificationCenter;
 import org.thingsboard.rule.engine.api.SmsService;
+import org.thingsboard.rule.engine.api.slack.SlackService;
 import org.thingsboard.rule.engine.api.sms.SmsSenderFactory;
+import org.thingsboard.script.api.js.JsInvokeService;
+import org.thingsboard.script.api.tbel.TbelInvokeService;
 import org.thingsboard.server.actors.service.ActorService;
 import org.thingsboard.server.actors.tenant.DebugTbRateLimits;
-import org.thingsboard.server.common.data.DataConstants;
-import org.thingsboard.server.common.data.Event;
+import org.thingsboard.server.cluster.TbClusterService;
+import org.thingsboard.server.common.data.event.ErrorEvent;
+import org.thingsboard.server.common.data.event.LifecycleEvent;
+import org.thingsboard.server.common.data.event.RuleChainDebugEvent;
+import org.thingsboard.server.common.data.event.RuleNodeDebugEvent;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.plugin.ComponentLifecycleEvent;
@@ -46,6 +51,9 @@ import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.common.msg.queue.TopicPartitionInfo;
 import org.thingsboard.server.common.msg.tools.TbRateLimits;
+import org.thingsboard.server.common.stats.TbApiUsageReportClient;
+import org.thingsboard.server.dao.alarm.AlarmCommentService;
+import org.thingsboard.server.dao.asset.AssetProfileService;
 import org.thingsboard.server.dao.asset.AssetService;
 import org.thingsboard.server.dao.attributes.AttributesService;
 import org.thingsboard.server.dao.audit.AuditLogService;
@@ -53,34 +61,51 @@ import org.thingsboard.server.dao.cassandra.CassandraCluster;
 import org.thingsboard.server.dao.customer.CustomerService;
 import org.thingsboard.server.dao.dashboard.DashboardService;
 import org.thingsboard.server.dao.device.ClaimDevicesService;
+import org.thingsboard.server.dao.device.DeviceCredentialsService;
+import org.thingsboard.server.dao.device.DeviceProfileService;
 import org.thingsboard.server.dao.device.DeviceService;
+import org.thingsboard.server.dao.edge.EdgeEventService;
+import org.thingsboard.server.dao.edge.EdgeService;
 import org.thingsboard.server.dao.entityview.EntityViewService;
 import org.thingsboard.server.dao.event.EventService;
-import org.thingsboard.server.dao.nosql.CassandraBufferedRateExecutor;
+import org.thingsboard.server.dao.nosql.CassandraBufferedRateReadExecutor;
+import org.thingsboard.server.dao.nosql.CassandraBufferedRateWriteExecutor;
+import org.thingsboard.server.dao.notification.NotificationRequestService;
+import org.thingsboard.server.dao.notification.NotificationRuleService;
+import org.thingsboard.server.dao.notification.NotificationTargetService;
+import org.thingsboard.server.dao.notification.NotificationTemplateService;
+import org.thingsboard.server.dao.ota.OtaPackageService;
+import org.thingsboard.server.dao.queue.QueueService;
 import org.thingsboard.server.dao.relation.RelationService;
+import org.thingsboard.server.dao.resource.ResourceService;
 import org.thingsboard.server.dao.rule.RuleChainService;
 import org.thingsboard.server.dao.rule.RuleNodeStateService;
+import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
 import org.thingsboard.server.dao.tenant.TenantProfileService;
 import org.thingsboard.server.dao.tenant.TenantService;
 import org.thingsboard.server.dao.timeseries.TimeseriesService;
 import org.thingsboard.server.dao.user.UserService;
+import org.thingsboard.server.dao.widget.WidgetTypeService;
+import org.thingsboard.server.dao.widget.WidgetsBundleService;
+import org.thingsboard.server.queue.discovery.DiscoveryService;
 import org.thingsboard.server.queue.discovery.PartitionService;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
-import org.thingsboard.server.queue.usagestats.TbApiUsageClient;
+import org.thingsboard.server.queue.notification.NotificationRuleProcessor;
+import org.thingsboard.server.queue.util.DataDecodingEncodingService;
 import org.thingsboard.server.service.apiusage.TbApiUsageStateService;
 import org.thingsboard.server.service.component.ComponentDiscoveryService;
-import org.thingsboard.server.common.transport.util.DataDecodingEncodingService;
+import org.thingsboard.server.service.edge.rpc.EdgeRpcService;
+import org.thingsboard.server.service.entitiy.entityview.TbEntityViewService;
 import org.thingsboard.server.service.executors.DbCallbackExecutorService;
 import org.thingsboard.server.service.executors.ExternalCallExecutorService;
+import org.thingsboard.server.service.executors.NotificationExecutorService;
 import org.thingsboard.server.service.executors.SharedEventLoopGroupService;
 import org.thingsboard.server.service.mail.MailExecutorService;
+import org.thingsboard.server.service.profile.TbAssetProfileCache;
 import org.thingsboard.server.service.profile.TbDeviceProfileCache;
-import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
-import org.thingsboard.server.service.queue.TbClusterService;
 import org.thingsboard.server.service.rpc.TbCoreDeviceRpcService;
+import org.thingsboard.server.service.rpc.TbRpcService;
 import org.thingsboard.server.service.rpc.TbRuleEngineDeviceRpcService;
-import org.thingsboard.server.service.script.JsExecutorService;
-import org.thingsboard.server.service.script.JsInvokeService;
 import org.thingsboard.server.service.session.DeviceSessionCacheService;
 import org.thingsboard.server.service.sms.SmsExecutorService;
 import org.thingsboard.server.service.state.DeviceStateService;
@@ -89,10 +114,10 @@ import org.thingsboard.server.service.telemetry.TelemetrySubscriptionService;
 import org.thingsboard.server.service.transport.TbCoreToTransportService;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -101,6 +126,29 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Component
 public class ActorSystemContext {
+
+    private static final FutureCallback<Void> RULE_CHAIN_DEBUG_EVENT_ERROR_CALLBACK = new FutureCallback<>() {
+        @Override
+        public void onSuccess(@Nullable Void event) {
+
+        }
+
+        @Override
+        public void onFailure(Throwable th) {
+            log.error("Could not save debug Event for Rule Chain", th);
+        }
+    };
+    private static final FutureCallback<Void> RULE_NODE_DEBUG_EVENT_ERROR_CALLBACK = new FutureCallback<>() {
+        @Override
+        public void onSuccess(@Nullable Void event) {
+
+        }
+
+        @Override
+        public void onFailure(Throwable th) {
+            log.error("Could not save debug Event for Node", th);
+        }
+    };
 
     protected final ObjectMapper mapper = new ObjectMapper();
 
@@ -116,7 +164,7 @@ public class ActorSystemContext {
 
     @Autowired
     @Getter
-    private TbApiUsageClient apiUsageClient;
+    private TbApiUsageReportClient apiUsageClient;
 
     @Autowired
     @Getter
@@ -134,6 +182,10 @@ public class ActorSystemContext {
 
     @Autowired
     @Getter
+    private DiscoveryService discoveryService;
+
+    @Autowired
+    @Getter
     private DataDecodingEncodingService encodingService;
 
     @Autowired
@@ -142,11 +194,27 @@ public class ActorSystemContext {
 
     @Autowired
     @Getter
+    private DeviceProfileService deviceProfileService;
+
+    @Autowired
+    @Getter
+    private AssetProfileService assetProfileService;
+
+    @Autowired
+    @Getter
+    private DeviceCredentialsService deviceCredentialsService;
+
+    @Autowired
+    @Getter
     private TbTenantProfileCache tenantProfileCache;
 
     @Autowired
     @Getter
     private TbDeviceProfileCache deviceProfileCache;
+
+    @Autowired
+    @Getter
+    private TbAssetProfileCache assetProfileCache;
 
     @Autowired
     @Getter
@@ -211,6 +279,11 @@ public class ActorSystemContext {
     @Getter
     private EntityViewService entityViewService;
 
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private TbEntityViewService tbEntityViewService;
+
     @Autowired
     @Getter
     private TelemetrySubscriptionService tsSubService;
@@ -221,11 +294,15 @@ public class ActorSystemContext {
 
     @Autowired
     @Getter
-    private JsInvokeService jsSandbox;
+    private AlarmCommentService alarmCommentService;
 
     @Autowired
     @Getter
-    private JsExecutorService jsExecutor;
+    private JsInvokeService jsInvokeService;
+
+    @Autowired(required = false)
+    @Getter
+    private TbelInvokeService tbelInvokeService;
 
     @Autowired
     @Getter
@@ -245,6 +322,10 @@ public class ActorSystemContext {
 
     @Autowired
     @Getter
+    private NotificationExecutorService notificationExecutor;
+
+    @Autowired
+    @Getter
     private SharedEventLoopGroupService sharedEventLoopGroupService;
 
     @Autowired
@@ -260,6 +341,35 @@ public class ActorSystemContext {
     private SmsSenderFactory smsSenderFactory;
 
     @Autowired
+    @Getter
+    private NotificationCenter notificationCenter;
+
+    @Autowired
+    @Getter
+    private NotificationRuleProcessor notificationRuleProcessor;
+
+    @Autowired
+    @Getter
+    private NotificationTargetService notificationTargetService;
+
+    @Autowired
+    @Getter
+    private NotificationTemplateService notificationTemplateService;
+
+    @Autowired
+    @Getter
+    private NotificationRequestService notificationRequestService;
+
+    @Autowired
+    @Getter
+    private NotificationRuleService notificationRuleService;
+
+    @Autowired
+    @Getter
+    private SlackService slackService;
+
+    @Lazy
+    @Autowired(required = false)
     @Getter
     private ClaimDevicesService claimDevicesService;
 
@@ -296,30 +406,90 @@ public class ActorSystemContext {
     @Getter
     private TbCoreDeviceRpcService tbCoreDeviceRpcService;
 
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private EdgeService edgeService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private EdgeEventService edgeEventService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private EdgeRpcService edgeRpcService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private ResourceService resourceService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private OtaPackageService otaPackageService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private TbRpcService tbRpcService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private QueueService queueService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private WidgetsBundleService widgetsBundleService;
+
+    @Lazy
+    @Autowired(required = false)
+    @Getter
+    private WidgetTypeService widgetTypeService;
+
     @Value("${actors.session.max_concurrent_sessions_per_device:1}")
     @Getter
     private long maxConcurrentSessionsPerDevice;
 
-    @Value("${actors.session.sync.timeout}")
+    @Value("${actors.session.sync.timeout:10000}")
     @Getter
     private long syncSessionTimeout;
 
-    @Value("${actors.rule.chain.error_persist_frequency}")
+    @Value("${actors.rule.chain.error_persist_frequency:3000}")
     @Getter
     private long ruleChainErrorPersistFrequency;
 
-    @Value("${actors.rule.node.error_persist_frequency}")
+    @Value("${actors.rule.node.error_persist_frequency:3000}")
     @Getter
     private long ruleNodeErrorPersistFrequency;
 
-    @Value("${actors.statistics.enabled}")
+    @Value("${actors.statistics.enabled:true}")
     @Getter
     private boolean statisticsEnabled;
 
-    @Value("${actors.statistics.persist_frequency}")
+    @Value("${actors.statistics.persist_frequency:3600000}")
     @Getter
     private long statisticsPersistFrequency;
 
+    @Value("${edges.enabled:true}")
+    @Getter
+    private boolean edgesEnabled;
+
+    @Value("${cache.type:caffeine}")
+    @Getter
+    private String cacheType;
+
+    @Getter
+    private boolean localCacheType;
+
+    @PostConstruct
+    public void init() {
+        this.localCacheType = "caffeine".equals(cacheType);
+    }
 
     @Scheduled(fixedDelayString = "${actors.statistics.js_print_interval_ms}")
     public void printStats() {
@@ -332,33 +502,41 @@ public class ActorSystemContext {
         }
     }
 
-    @Value("${actors.tenant.create_components_on_init}")
+    @Value("${actors.tenant.create_components_on_init:true}")
     @Getter
     private boolean tenantComponentsInitEnabled;
 
-    @Value("${actors.rule.allow_system_mail_service}")
+    @Value("${actors.rule.allow_system_mail_service:true}")
     @Getter
     private boolean allowSystemMailService;
 
-    @Value("${actors.rule.allow_system_sms_service}")
+    @Value("${actors.rule.allow_system_sms_service:true}")
     @Getter
     private boolean allowSystemSmsService;
 
-    @Value("${transport.sessions.inactivity_timeout}")
+    @Value("${transport.sessions.inactivity_timeout:300000}")
     @Getter
     private long sessionInactivityTimeout;
 
-    @Value("${transport.sessions.report_timeout}")
+    @Value("${transport.sessions.report_timeout:3000}")
     @Getter
     private long sessionReportTimeout;
 
-    @Value("${actors.rule.chain.debug_mode_rate_limits_per_tenant.enabled}")
+    @Value("${actors.rule.chain.debug_mode_rate_limits_per_tenant.enabled:true}")
     @Getter
     private boolean debugPerTenantEnabled;
 
-    @Value("${actors.rule.chain.debug_mode_rate_limits_per_tenant.configuration}")
+    @Value("${actors.rule.chain.debug_mode_rate_limits_per_tenant.configuration:50000:3600}")
     @Getter
     private String debugPerTenantLimitsConfiguration;
+
+    @Value("${actors.rpc.sequential:false}")
+    @Getter
+    private boolean rpcSequential;
+
+    @Value("${actors.rpc.max_retries:5}")
+    @Getter
+    private int maxRpcRetries;
 
     @Getter
     @Setter
@@ -377,7 +555,11 @@ public class ActorSystemContext {
 
     @Autowired(required = false)
     @Getter
-    private CassandraBufferedRateExecutor cassandraBufferedRateExecutor;
+    private CassandraBufferedRateReadExecutor cassandraBufferedRateReadExecutor;
+
+    @Autowired(required = false)
+    @Getter
+    private CassandraBufferedRateWriteExecutor cassandraBufferedRateWriteExecutor;
 
     @Autowired(required = false)
     @Getter
@@ -388,46 +570,34 @@ public class ActorSystemContext {
     }
 
     public void persistError(TenantId tenantId, EntityId entityId, String method, Exception e) {
-        Event event = new Event();
-        event.setTenantId(tenantId);
-        event.setEntityId(entityId);
-        event.setType(DataConstants.ERROR);
-        event.setBody(toBodyJson(serviceInfoProvider.getServiceInfo().getServiceId(), method, toString(e)));
-        persistEvent(event);
+        eventService.saveAsync(ErrorEvent.builder()
+                .tenantId(tenantId)
+                .entityId(entityId.getId())
+                .serviceId(getServiceId())
+                .method(method)
+                .error(toString(e)).build());
     }
 
     public void persistLifecycleEvent(TenantId tenantId, EntityId entityId, ComponentLifecycleEvent lcEvent, Exception e) {
-        Event event = new Event();
-        event.setTenantId(tenantId);
-        event.setEntityId(entityId);
-        event.setType(DataConstants.LC_EVENT);
-        event.setBody(toBodyJson(serviceInfoProvider.getServiceInfo().getServiceId(), lcEvent, Optional.ofNullable(e)));
-        persistEvent(event);
-    }
+        LifecycleEvent.LifecycleEventBuilder event = LifecycleEvent.builder()
+                .tenantId(tenantId)
+                .entityId(entityId.getId())
+                .serviceId(getServiceId())
+                .lcEventType(lcEvent.name());
 
-    private void persistEvent(Event event) {
-        eventService.save(event);
+        if (e != null) {
+            event.success(false).error(toString(e));
+        } else {
+            event.success(true);
+        }
+
+        eventService.saveAsync(event.build());
     }
 
     private String toString(Throwable e) {
         StringWriter sw = new StringWriter();
         e.printStackTrace(new PrintWriter(sw));
         return sw.toString();
-    }
-
-    private JsonNode toBodyJson(String serviceId, ComponentLifecycleEvent event, Optional<Exception> e) {
-        ObjectNode node = mapper.createObjectNode().put("server", serviceId).put("event", event.name());
-        if (e.isPresent()) {
-            node = node.put("success", false);
-            node = node.put("error", toString(e.get()));
-        } else {
-            node = node.put("success", true);
-        }
-        return node;
-    }
-
-    private JsonNode toBodyJson(String serviceId, String method, String body) {
-        return mapper.createObjectNode().put("server", serviceId).put("method", method).put("error", body);
     }
 
     public TopicPartitionInfo resolve(ServiceType serviceType, TenantId tenantId, EntityId entityId) {
@@ -438,66 +608,54 @@ public class ActorSystemContext {
         return partitionService.resolve(serviceType, queueName, tenantId, entityId);
     }
 
-
     public String getServiceId() {
         return serviceInfoProvider.getServiceId();
     }
 
     public void persistDebugInput(TenantId tenantId, EntityId entityId, TbMsg tbMsg, String relationType) {
-        persistDebugAsync(tenantId, entityId, "IN", tbMsg, relationType, null);
+        persistDebugAsync(tenantId, entityId, "IN", tbMsg, relationType, null, null);
     }
 
     public void persistDebugInput(TenantId tenantId, EntityId entityId, TbMsg tbMsg, String relationType, Throwable error) {
-        persistDebugAsync(tenantId, entityId, "IN", tbMsg, relationType, error);
+        persistDebugAsync(tenantId, entityId, "IN", tbMsg, relationType, error, null);
+    }
+
+    public void persistDebugOutput(TenantId tenantId, EntityId entityId, TbMsg tbMsg, String relationType, Throwable error, String failureMessage) {
+        persistDebugAsync(tenantId, entityId, "OUT", tbMsg, relationType, error, failureMessage);
     }
 
     public void persistDebugOutput(TenantId tenantId, EntityId entityId, TbMsg tbMsg, String relationType, Throwable error) {
-        persistDebugAsync(tenantId, entityId, "OUT", tbMsg, relationType, error);
+        persistDebugAsync(tenantId, entityId, "OUT", tbMsg, relationType, error, null);
     }
 
     public void persistDebugOutput(TenantId tenantId, EntityId entityId, TbMsg tbMsg, String relationType) {
-        persistDebugAsync(tenantId, entityId, "OUT", tbMsg, relationType, null);
+        persistDebugAsync(tenantId, entityId, "OUT", tbMsg, relationType, null, null);
     }
 
-    private void persistDebugAsync(TenantId tenantId, EntityId entityId, String type, TbMsg tbMsg, String relationType, Throwable error) {
+    private void persistDebugAsync(TenantId tenantId, EntityId entityId, String type, TbMsg tbMsg, String relationType, Throwable error, String failureMessage) {
         if (checkLimits(tenantId, tbMsg, error)) {
             try {
-                Event event = new Event();
-                event.setTenantId(tenantId);
-                event.setEntityId(entityId);
-                event.setType(DataConstants.DEBUG_RULE_NODE);
-
-                String metadata = mapper.writeValueAsString(tbMsg.getMetaData().getData());
-
-                ObjectNode node = mapper.createObjectNode()
-                        .put("type", type)
-                        .put("server", getServiceId())
-                        .put("entityId", tbMsg.getOriginator().getId().toString())
-                        .put("entityName", tbMsg.getOriginator().getEntityType().name())
-                        .put("msgId", tbMsg.getId().toString())
-                        .put("msgType", tbMsg.getType())
-                        .put("dataType", tbMsg.getDataType().name())
-                        .put("relationType", relationType)
-                        .put("data", tbMsg.getData())
-                        .put("metadata", metadata);
+                RuleNodeDebugEvent.RuleNodeDebugEventBuilder event = RuleNodeDebugEvent.builder()
+                        .tenantId(tenantId)
+                        .entityId(entityId.getId())
+                        .serviceId(getServiceId())
+                        .eventType(type)
+                        .eventEntity(tbMsg.getOriginator())
+                        .msgId(tbMsg.getId())
+                        .msgType(tbMsg.getType())
+                        .dataType(tbMsg.getDataType().name())
+                        .relationType(relationType)
+                        .data(tbMsg.getData())
+                        .metadata(mapper.writeValueAsString(tbMsg.getMetaData().getData()));
 
                 if (error != null) {
-                    node = node.put("error", toString(error));
+                    event.error(toString(error));
+                } else if (failureMessage != null) {
+                    event.error(failureMessage);
                 }
 
-                event.setBody(node);
-                ListenableFuture<Event> future = eventService.saveAsync(event);
-                Futures.addCallback(future, new FutureCallback<Event>() {
-                    @Override
-                    public void onSuccess(@Nullable Event event) {
-
-                    }
-
-                    @Override
-                    public void onFailure(Throwable th) {
-                        log.error("Could not save debug Event for Node", th);
-                    }
-                }, MoreExecutors.directExecutor());
+                ListenableFuture<Void> future = eventService.saveAsync(event.build());
+                Futures.addCallback(future, RULE_NODE_DEBUG_EVENT_ERROR_CALLBACK, MoreExecutors.directExecutor());
             } catch (IOException ex) {
                 log.warn("Failed to persist rule node debug message", ex);
             }
@@ -524,33 +682,17 @@ public class ActorSystemContext {
     }
 
     private void persistRuleChainDebugModeEvent(TenantId tenantId, EntityId entityId, Throwable error) {
-        Event event = new Event();
-        event.setTenantId(tenantId);
-        event.setEntityId(entityId);
-        event.setType(DataConstants.DEBUG_RULE_CHAIN);
-
-        ObjectNode node = mapper.createObjectNode()
-                //todo: what fields are needed here?
-                .put("server", getServiceId())
-                .put("message", "Reached debug mode rate limit!");
-
+        RuleChainDebugEvent.RuleChainDebugEventBuilder event = RuleChainDebugEvent.builder()
+                .tenantId(tenantId)
+                .entityId(entityId.getId())
+                .serviceId(getServiceId())
+                .message("Reached debug mode rate limit!");
         if (error != null) {
-            node = node.put("error", toString(error));
+            event.error(toString(error));
         }
 
-        event.setBody(node);
-        ListenableFuture<Event> future = eventService.saveAsync(event);
-        Futures.addCallback(future, new FutureCallback<Event>() {
-            @Override
-            public void onSuccess(@Nullable Event event) {
-
-            }
-
-            @Override
-            public void onFailure(Throwable th) {
-                log.error("Could not save debug Event for Rule Chain", th);
-            }
-        }, MoreExecutors.directExecutor());
+        ListenableFuture<Void> future = eventService.saveAsync(event.build());
+        Futures.addCallback(future, RULE_CHAIN_DEBUG_EVENT_ERROR_CALLBACK, MoreExecutors.directExecutor());
     }
 
     public static Exception toException(Throwable error) {

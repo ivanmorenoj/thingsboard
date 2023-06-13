@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,6 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.Future;
 import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.util.StringUtils;
 import org.thingsboard.mqtt.MqttClient;
 import org.thingsboard.mqtt.MqttClientConfig;
 import org.thingsboard.mqtt.MqttConnectResult;
@@ -34,6 +32,8 @@ import org.thingsboard.rule.engine.api.util.TbNodeUtils;
 import org.thingsboard.rule.engine.credentials.BasicCredentials;
 import org.thingsboard.rule.engine.credentials.ClientCredentials;
 import org.thingsboard.rule.engine.credentials.CredentialsType;
+import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.plugin.ComponentClusteringMode;
 import org.thingsboard.server.common.data.plugin.ComponentType;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
@@ -48,10 +48,11 @@ import java.util.concurrent.TimeoutException;
         type = ComponentType.EXTERNAL,
         name = "mqtt",
         configClazz = TbMqttNodeConfiguration.class,
+        clusteringMode = ComponentClusteringMode.USER_PREFERENCE,
         nodeDescription = "Publish messages to the MQTT broker",
         nodeDetails = "Will publish message payload to the MQTT broker with QoS <b>AT_LEAST_ONCE</b>.",
         uiResources = {"static/rulenode/rulenode-core-config.js"},
-        configDirective = "tbActionNodeMqttConfig",
+        configDirective = "tbExternalNodeMqttConfig",
         icon = "call_split"
 )
 public class TbMqttNode implements TbNode {
@@ -77,7 +78,7 @@ public class TbMqttNode implements TbNode {
     @Override
     public void onMsg(TbContext ctx, TbMsg msg) {
         String topic = TbNodeUtils.processPattern(this.mqttNodeConfiguration.getTopicPattern(), msg);
-        this.mqttClient.publish(topic, Unpooled.wrappedBuffer(msg.getData().getBytes(UTF8)), MqttQoS.AT_LEAST_ONCE)
+        this.mqttClient.publish(topic, Unpooled.wrappedBuffer(msg.getData().getBytes(UTF8)), MqttQoS.AT_LEAST_ONCE, mqttNodeConfiguration.isRetainedMessage())
                 .addListener(future -> {
                             if (future.isSuccess()) {
                                 ctx.tellSuccess(msg);
@@ -105,7 +106,8 @@ public class TbMqttNode implements TbNode {
     protected MqttClient initClient(TbContext ctx) throws Exception {
         MqttClientConfig config = new MqttClientConfig(getSslContext());
         if (!StringUtils.isEmpty(this.mqttNodeConfiguration.getClientId())) {
-            config.setClientId(this.mqttNodeConfiguration.getClientId());
+            config.setClientId(this.mqttNodeConfiguration.isAppendClientIdSuffix() ?
+                    this.mqttNodeConfiguration.getClientId() + "_" + ctx.getServiceId() : this.mqttNodeConfiguration.getClientId());
         }
         config.setCleanSession(this.mqttNodeConfiguration.isCleanSession());
 

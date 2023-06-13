@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import java.util.Optional;
 public class StringDataEntry extends BasicKvEntry {
 
     private static final long serialVersionUID = 1L;
+
     private final String value;
 
     public StringDataEntry(String key, String value) {
@@ -64,7 +65,7 @@ public class StringDataEntry extends BasicKvEntry {
     public String toString() {
         return "StringDataEntry{" + "value='" + value + '\'' + "} " + super.toString();
     }
-    
+
     @Override
     public String getValueAsString() {
         return value;

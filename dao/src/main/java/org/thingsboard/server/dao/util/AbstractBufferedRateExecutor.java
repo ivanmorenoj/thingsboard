@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,14 +28,22 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import lombok.extern.slf4j.Slf4j;
+import org.thingsboard.common.util.ThingsBoardExecutors;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.msg.tools.TbRateLimits;
+import org.thingsboard.server.common.stats.DefaultCounter;
+import org.thingsboard.server.common.stats.StatsCounter;
 import org.thingsboard.server.common.stats.StatsFactory;
 import org.thingsboard.server.common.stats.StatsType;
-import org.thingsboard.server.common.msg.tools.TbRateLimits;
+import org.thingsboard.server.dao.entity.EntityService;
 import org.thingsboard.server.dao.nosql.CassandraStatementTask;
+import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
 
 import javax.annotation.Nullable;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,8 +73,6 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
     private final ScheduledExecutorService timeoutExecutor;
     private final int concurrencyLimit;
     private final int printQueriesFreq;
-    private final boolean perTenantLimitsEnabled;
-    private final String perTenantLimitsConfiguration;
     private final ConcurrentMap<TenantId, TbRateLimits> perTenantLimits = new ConcurrentHashMap<>();
 
     private final AtomicInteger printQueriesIdx = new AtomicInteger(0);
@@ -74,21 +80,30 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
     protected final AtomicInteger concurrencyLevel;
     protected final BufferedRateExecutorStats stats;
 
-    public AbstractBufferedRateExecutor(int queueLimit, int concurrencyLimit, long maxWaitTime, int dispatcherThreads, int callbackThreads, long pollMs,
-                                        boolean perTenantLimitsEnabled, String perTenantLimitsConfiguration, int printQueriesFreq, StatsFactory statsFactory) {
+    private final EntityService entityService;
+    private final TbTenantProfileCache tenantProfileCache;
+
+    private final boolean printTenantNames;
+    private final Map<TenantId, String> tenantNamesCache = new HashMap<>();
+
+    public AbstractBufferedRateExecutor(int queueLimit, int concurrencyLimit, long maxWaitTime, int dispatcherThreads,
+                                        int callbackThreads, long pollMs, int printQueriesFreq, StatsFactory statsFactory,
+                                        EntityService entityService, TbTenantProfileCache tenantProfileCache, boolean printTenantNames) {
         this.maxWaitTime = maxWaitTime;
         this.pollMs = pollMs;
         this.concurrencyLimit = concurrencyLimit;
         this.printQueriesFreq = printQueriesFreq;
         this.queue = new LinkedBlockingDeque<>(queueLimit);
-        this.dispatcherExecutor = Executors.newFixedThreadPool(dispatcherThreads, ThingsBoardThreadFactory.forName("nosql-dispatcher"));
-        this.callbackExecutor = Executors.newWorkStealingPool(callbackThreads);
-        this.timeoutExecutor = Executors.newSingleThreadScheduledExecutor(ThingsBoardThreadFactory.forName("nosql-timeout"));
-        this.perTenantLimitsEnabled = perTenantLimitsEnabled;
-        this.perTenantLimitsConfiguration = perTenantLimitsConfiguration;
+        this.dispatcherExecutor = Executors.newFixedThreadPool(dispatcherThreads, ThingsBoardThreadFactory.forName("nosql-" + getBufferName() + "-dispatcher"));
+        this.callbackExecutor = ThingsBoardExecutors.newWorkStealingPool(callbackThreads, "nosql-" + getBufferName() + "-callback");
+        this.timeoutExecutor = Executors.newSingleThreadScheduledExecutor(ThingsBoardThreadFactory.forName("nosql-" + getBufferName() + "-timeout"));
         this.stats = new BufferedRateExecutorStats(statsFactory);
-        String concurrencyLevelKey = StatsType.RATE_EXECUTOR.getName() + "." + CONCURRENCY_LEVEL;
+        String concurrencyLevelKey = StatsType.RATE_EXECUTOR.getName() + "." + CONCURRENCY_LEVEL + getBufferName(); //metric name may change with buffer name suffix
         this.concurrencyLevel = statsFactory.createGauge(concurrencyLevelKey, new AtomicInteger(0));
+
+        this.entityService = entityService;
+        this.tenantProfileCache = tenantProfileCache;
+        this.printTenantNames = printTenantNames;
 
         for (int i = 0; i < dispatcherThreads; i++) {
             dispatcherExecutor.submit(this::dispatch);
@@ -99,12 +114,21 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
     public F submit(T task) {
         SettableFuture<V> settableFuture = create();
         F result = wrap(task, settableFuture);
+
         boolean perTenantLimitReached = false;
-        if (perTenantLimitsEnabled) {
+
+        var tenantProfileConfiguration =
+                (task.getTenantId() != null && !TenantId.SYS_TENANT_ID.equals(task.getTenantId()))
+                        ? tenantProfileCache.get(task.getTenantId()).getDefaultProfileConfiguration()
+                        : null;
+        if (tenantProfileConfiguration != null &&
+                StringUtils.isNotEmpty(tenantProfileConfiguration.getCassandraQueryTenantRateLimitsConfiguration())) {
             if (task.getTenantId() == null) {
                 log.info("Invalid task received: {}", task);
             } else if (!task.getTenantId().isNullUid()) {
-                TbRateLimits rateLimits = perTenantLimits.computeIfAbsent(task.getTenantId(), id -> new TbRateLimits(perTenantLimitsConfiguration));
+                TbRateLimits rateLimits = perTenantLimits.computeIfAbsent(
+                        task.getTenantId(), id -> new TbRateLimits(tenantProfileConfiguration.getCassandraQueryTenantRateLimitsConfiguration())
+                );
                 if (!rateLimits.tryConsume()) {
                     stats.incrementRateLimitedTenant(task.getTenantId());
                     stats.getTotalRateLimited().increment();
@@ -112,7 +136,10 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
                     perTenantLimitReached = true;
                 }
             }
+        } else if (!TenantId.SYS_TENANT_ID.equals(task.getTenantId())) {
+            perTenantLimits.remove(task.getTenantId());
         }
+
         if (!perTenantLimitReached) {
             try {
                 stats.getTotalAdded().increment();
@@ -142,6 +169,8 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
     protected abstract F wrap(T task, SettableFuture<V> future);
 
     protected abstract ListenableFuture<V> execute(AsyncTaskContext<T, V> taskCtx);
+
+    public abstract String getBufferName();
 
     private void dispatch() {
         log.info("Buffered rate executor thread started");
@@ -262,5 +291,53 @@ public abstract class AbstractBufferedRateExecutor<T extends AsyncTask, F extend
 
     protected int getQueueSize() {
         return queue.size();
+    }
+
+    public void printStats() {
+        int queueSize = getQueueSize();
+        int rateLimitedTenantsCount = (int) stats.getRateLimitedTenants().values().stream()
+                .filter(defaultCounter -> defaultCounter.get() > 0)
+                .count();
+
+        if (queueSize > 0
+                || rateLimitedTenantsCount > 0
+                || concurrencyLevel.get() > 0
+                || stats.getStatsCounters().stream().anyMatch(counter -> counter.get() > 0)
+        ) {
+            StringBuilder statsBuilder = new StringBuilder();
+
+            statsBuilder.append("queueSize").append(" = [").append(queueSize).append("] ");
+            stats.getStatsCounters().forEach(counter -> {
+                statsBuilder.append(counter.getName()).append(" = [").append(counter.get()).append("] ");
+            });
+            statsBuilder.append("totalRateLimitedTenants").append(" = [").append(rateLimitedTenantsCount).append("] ");
+            statsBuilder.append(CONCURRENCY_LEVEL).append(" = [").append(concurrencyLevel.get()).append("] ");
+
+            stats.getStatsCounters().forEach(StatsCounter::clear);
+            log.info("Permits {}", statsBuilder);
+        }
+
+        stats.getRateLimitedTenants().entrySet().stream()
+                .filter(entry -> entry.getValue().get() > 0)
+                .forEach(entry -> {
+                    TenantId tenantId = entry.getKey();
+                    DefaultCounter counter = entry.getValue();
+                    int rateLimitedRequests = counter.get();
+                    counter.clear();
+                    if (printTenantNames) {
+                        String name = tenantNamesCache.computeIfAbsent(tenantId, tId -> {
+                            String defaultName = "N/A";
+                            try {
+                                return entityService.fetchEntityName(TenantId.SYS_TENANT_ID, tenantId).orElse(defaultName);
+                            } catch (Exception e) {
+                                log.error("[{}] Failed to get tenant name", tenantId, e);
+                                return defaultName;
+                            }
+                        });
+                        log.info("[{}][{}] Rate limited requests: {}", tenantId, name, rateLimitedRequests);
+                    } else {
+                        log.info("[{}] Rate limited requests: {}", tenantId, rateLimitedRequests);
+                    }
+                });
     }
 }

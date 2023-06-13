@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,12 +26,17 @@ import org.thingsboard.server.service.component.ComponentDiscoveryService;
 import org.thingsboard.server.service.install.DatabaseEntitiesUpgradeService;
 import org.thingsboard.server.service.install.DatabaseTsUpgradeService;
 import org.thingsboard.server.service.install.EntityDatabaseSchemaService;
+import org.thingsboard.server.service.install.InstallScripts;
+import org.thingsboard.server.service.install.NoSqlKeyspaceService;
 import org.thingsboard.server.service.install.SystemDataLoaderService;
 import org.thingsboard.server.service.install.TsDatabaseSchemaService;
 import org.thingsboard.server.service.install.TsLatestDatabaseSchemaService;
 import org.thingsboard.server.service.install.migrate.EntitiesMigrateService;
 import org.thingsboard.server.service.install.migrate.TsLatestMigrateService;
+import org.thingsboard.server.service.install.update.CacheCleanupService;
 import org.thingsboard.server.service.install.update.DataUpdateService;
+
+import static org.thingsboard.server.service.install.update.DefaultDataUpdateService.getEnv;
 
 @Service
 @Profile("install")
@@ -47,8 +52,14 @@ public class ThingsboardInstallService {
     @Value("${install.load_demo:false}")
     private Boolean loadDemo;
 
+    @Value("${state.persistToTelemetry:false}")
+    private boolean persistToTelemetry;
+
     @Autowired
     private EntityDatabaseSchemaService entityDatabaseSchemaService;
+
+    @Autowired(required = false)
+    private NoSqlKeyspaceService noSqlKeyspaceService;
 
     @Autowired
     private TsDatabaseSchemaService tsDatabaseSchemaService;
@@ -74,16 +85,24 @@ public class ThingsboardInstallService {
     @Autowired
     private DataUpdateService dataUpdateService;
 
+    @Autowired
+    private CacheCleanupService cacheCleanupService;
+
     @Autowired(required = false)
     private EntitiesMigrateService entitiesMigrateService;
 
     @Autowired(required = false)
     private TsLatestMigrateService latestMigrateService;
 
+    @Autowired
+    private InstallScripts installScripts;
+
     public void performInstall() {
         try {
             if (isUpgrade) {
                 log.info("Starting ThingsBoard Upgrade from version {} ...", upgradeFromVersion);
+
+                cacheCleanupService.clearCache(upgradeFromVersion);
 
                 if ("2.5.0-cassandra".equals(upgradeFromVersion)) {
                     log.info("Migrating ThingsBoard entities data from cassandra to SQL database ...");
@@ -191,13 +210,63 @@ public class ThingsboardInstallService {
                                 databaseTsUpgradeService.upgradeDatabase("3.2.1");
                             }
                             databaseEntitiesUpgradeService.upgradeDatabase("3.2.1");
-                            log.info("Updating system data...");
-                            systemDataLoaderService.updateSystemWidgets();
+                        case "3.2.2":
+                            log.info("Upgrading ThingsBoard from version 3.2.2 to 3.3.0 ...");
+                            if (databaseTsUpgradeService != null) {
+                                databaseTsUpgradeService.upgradeDatabase("3.2.2");
+                            }
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.2.2");
+
+                            dataUpdateService.updateData("3.2.2");
+                            systemDataLoaderService.createOAuth2Templates();
+                        case "3.3.0":
+                            log.info("Upgrading ThingsBoard from version 3.3.0 to 3.3.1 ...");
+                        case "3.3.1":
+                            log.info("Upgrading ThingsBoard from version 3.3.1 to 3.3.2 ...");
+                        case "3.3.2":
+                            log.info("Upgrading ThingsBoard from version 3.3.2 to 3.3.3 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.3.2");
+                            dataUpdateService.updateData("3.3.2");
+                        case "3.3.3":
+                            log.info("Upgrading ThingsBoard from version 3.3.3 to 3.3.4 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.3.3");
+                        case "3.3.4":
+                            log.info("Upgrading ThingsBoard from version 3.3.4 to 3.4.0 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.3.4");
+                            dataUpdateService.updateData("3.3.4");
+                        case "3.4.0":
+                            log.info("Upgrading ThingsBoard from version 3.4.0 to 3.4.1 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.4.0");
+                            dataUpdateService.updateData("3.4.0");
+                        case "3.4.1":
+                            log.info("Upgrading ThingsBoard from version 3.4.1 to 3.4.2 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.4.1");
+                            dataUpdateService.updateData("3.4.1");
+                        case "3.4.2":
+                            log.info("Upgrading ThingsBoard from version 3.4.2 to 3.4.3 ...");
+                        case "3.4.3":
+                            log.info("Upgrading ThingsBoard from version 3.4.3 to 3.4.4 ...");
+                        case "3.4.4":
+                            log.info("Upgrading ThingsBoard from version 3.4.4 to 3.5.0 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.4.4");
+                            if (!getEnv("SKIP_DEFAULT_NOTIFICATION_CONFIGS_CREATION", false)) {
+                                systemDataLoaderService.createDefaultNotificationConfigs();
+                            } else {
+                                log.info("Skipping default notification configs creation");
+                            }
+                        case "3.5.0":
+                            log.info("Upgrading ThingsBoard from version 3.5.0 to 3.5.1 ...");
+                            databaseEntitiesUpgradeService.upgradeDatabase("3.5.0");
+                            //TODO DON'T FORGET to update switch statement in the CacheCleanupService if you need to clear the cache
                             break;
                         default:
                             throw new RuntimeException("Unable to upgrade ThingsBoard, unsupported fromVersion: " + upgradeFromVersion);
-
                     }
+                    entityDatabaseSchemaService.createOrUpdateViewsAndFunctions();
+                    entityDatabaseSchemaService.createOrUpdateDeviceInfoView(persistToTelemetry);
+                    log.info("Updating system data...");
+                    systemDataLoaderService.updateSystemWidgets();
+                    installScripts.loadSystemLwm2mResources();
                 }
                 log.info("Upgrade finished successfully!");
 
@@ -209,7 +278,14 @@ public class ThingsboardInstallService {
 
                 entityDatabaseSchemaService.createDatabaseSchema();
 
+                entityDatabaseSchemaService.createOrUpdateViewsAndFunctions();
+                entityDatabaseSchemaService.createOrUpdateDeviceInfoView(persistToTelemetry);
+
                 log.info("Installing DataBase schema for timeseries...");
+
+                if (noSqlKeyspaceService != null) {
+                    noSqlKeyspaceService.createDatabaseSchema();
+                }
 
                 tsDatabaseSchemaService.createDatabaseSchema();
 
@@ -224,10 +300,15 @@ public class ThingsboardInstallService {
                 systemDataLoaderService.createSysAdmin();
                 systemDataLoaderService.createDefaultTenantProfiles();
                 systemDataLoaderService.createAdminSettings();
+                systemDataLoaderService.createRandomJwtSettings();
                 systemDataLoaderService.loadSystemWidgets();
                 systemDataLoaderService.createOAuth2Templates();
+                systemDataLoaderService.createQueues();
+                systemDataLoaderService.createDefaultNotificationConfigs();
+
 //                systemDataLoaderService.loadSystemPlugins();
 //                systemDataLoaderService.loadSystemRules();
+                installScripts.loadSystemLwm2mResources();
 
                 if (loadDemo) {
                     log.info("Loading demo data...");
@@ -246,3 +327,4 @@ public class ThingsboardInstallService {
     }
 
 }
+

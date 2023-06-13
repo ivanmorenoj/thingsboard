@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,27 @@
  */
 package org.thingsboard.server.dao.service;
 
+import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import org.junit.After;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.RandomUtils;
+import org.hamcrest.Matchers;
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ResultSetExtractor;
 import org.thingsboard.server.common.data.DataConstants;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.EntityType;
-import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.asset.Asset;
+import org.thingsboard.server.common.data.edge.Edge;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DeviceId;
+import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.IdBased;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
@@ -41,8 +46,11 @@ import org.thingsboard.server.common.data.kv.LongDataEntry;
 import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.query.AssetSearchQueryFilter;
+import org.thingsboard.server.common.data.query.AssetTypeFilter;
 import org.thingsboard.server.common.data.query.DeviceSearchQueryFilter;
 import org.thingsboard.server.common.data.query.DeviceTypeFilter;
+import org.thingsboard.server.common.data.query.EdgeSearchQueryFilter;
+import org.thingsboard.server.common.data.query.EdgeTypeFilter;
 import org.thingsboard.server.common.data.query.EntityCountQuery;
 import org.thingsboard.server.common.data.query.EntityData;
 import org.thingsboard.server.common.data.query.EntityDataPageLink;
@@ -51,56 +59,65 @@ import org.thingsboard.server.common.data.query.EntityDataSortOrder;
 import org.thingsboard.server.common.data.query.EntityKey;
 import org.thingsboard.server.common.data.query.EntityKeyType;
 import org.thingsboard.server.common.data.query.EntityListFilter;
+import org.thingsboard.server.common.data.query.EntityNameFilter;
 import org.thingsboard.server.common.data.query.FilterPredicateValue;
 import org.thingsboard.server.common.data.query.KeyFilter;
 import org.thingsboard.server.common.data.query.NumericFilterPredicate;
 import org.thingsboard.server.common.data.query.RelationsQueryFilter;
 import org.thingsboard.server.common.data.query.StringFilterPredicate;
+import org.thingsboard.server.common.data.query.StringFilterPredicate.StringOperation;
 import org.thingsboard.server.common.data.relation.EntityRelation;
 import org.thingsboard.server.common.data.relation.EntitySearchDirection;
 import org.thingsboard.server.common.data.relation.RelationEntityTypeFilter;
 import org.thingsboard.server.common.data.relation.RelationTypeGroup;
+import org.thingsboard.server.dao.asset.AssetService;
 import org.thingsboard.server.dao.attributes.AttributesService;
+import org.thingsboard.server.dao.device.DeviceService;
+import org.thingsboard.server.dao.edge.EdgeService;
+import org.thingsboard.server.dao.entity.EntityService;
 import org.thingsboard.server.dao.model.sqlts.ts.TsKvEntity;
+import org.thingsboard.server.dao.relation.RelationService;
+import org.thingsboard.server.dao.sql.relation.RelationRepository;
 import org.thingsboard.server.dao.timeseries.TimeseriesService;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertEquals;
+
+@Slf4j
 public abstract class BaseEntityServiceTest extends AbstractServiceTest {
 
-    @Autowired
-    private AttributesService attributesService;
+    static final int ENTITY_COUNT = 5;
 
     @Autowired
-    private TimeseriesService timeseriesService;
-
-    private TenantId tenantId;
-
+    AssetService assetService;
     @Autowired
-    private JdbcTemplate template;
+    AttributesService attributesService;
+    @Autowired
+    DeviceService deviceService;
+    @Autowired
+    EdgeService edgeService;
+    @Autowired
+    EntityService entityService;
+    @Autowired
+    RelationRepository relationRepository;
+    @Autowired
+    RelationService relationService;
+    @Autowired
+    TimeseriesService timeseriesService;
 
-    @Before
-    public void before() {
-        Tenant tenant = new Tenant();
-        tenant.setTitle("My tenant");
-        Tenant savedTenant = tenantService.saveTenant(tenant);
-        Assert.assertNotNull(savedTenant);
-        tenantId = savedTenant.getId();
-    }
-
-    @After
-    public void after() {
-        tenantService.deleteTenant(tenantId);
-    }
-
-    
     @Test
     public void testCountEntitiesByQuery() throws InterruptedException {
         List<Device> devices = new ArrayList<>();
@@ -114,7 +131,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         }
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityCountQuery countQuery = new EntityCountQuery(filter);
@@ -122,11 +139,11 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         long count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
         Assert.assertEquals(97, count);
 
-        filter.setDeviceType("unknown");
+        filter.setDeviceTypes(List.of("unknown"));
         count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
         Assert.assertEquals(0, count);
 
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("Device1");
         count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
         Assert.assertEquals(11, count);
@@ -144,12 +161,12 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         Assert.assertEquals(0, count);
     }
 
-    
+
     @Test
     public void testCountHierarchicalEntitiesByQuery() throws InterruptedException {
         List<Asset> assets = new ArrayList<>();
         List<Device> devices = new ArrayList<>();
-        createTestHierarchy(assets, devices, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+        createTestHierarchy(tenantId, assets, devices, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
 
         RelationsQueryFilter filter = new RelationsQueryFilter();
         filter.setRootEntity(tenantId);
@@ -158,7 +175,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         EntityCountQuery countQuery = new EntityCountQuery(filter);
 
         long count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
-        Assert.assertEquals(30, count);
+        Assert.assertEquals(31, count); //due to the loop relations in hierarchy, the TenantId included in total count (1*Tenant + 5*Asset + 5*5*Devices = 31)
 
         filter.setFilters(Collections.singletonList(new RelationEntityTypeFilter("Contains", Collections.singletonList(EntityType.DEVICE))));
         count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
@@ -209,26 +226,122 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         Assert.assertEquals(0, count);
     }
 
-    
+    @Test
+    public void testCountEdgeEntitiesByQuery() throws InterruptedException {
+        List<Edge> edges = new ArrayList<>();
+        for (int i = 0; i < 97; i++) {
+            Edge edge = createEdge(i, "default");
+            edges.add(edgeService.saveEdge(edge));
+        }
+
+        EdgeTypeFilter filter = new EdgeTypeFilter();
+        filter.setEdgeTypes(List.of("default"));
+        filter.setEdgeNameFilter("");
+
+        EntityCountQuery countQuery = new EntityCountQuery(filter);
+
+        long count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(97, count);
+
+        filter.setEdgeTypes(List.of("unknown"));
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(0, count);
+
+        filter.setEdgeTypes(List.of("default"));
+        filter.setEdgeNameFilter("Edge1");
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(11, count);
+
+        EntityListFilter entityListFilter = new EntityListFilter();
+        entityListFilter.setEntityType(EntityType.EDGE);
+        entityListFilter.setEntityList(edges.stream().map(Edge::getId).map(EdgeId::toString).collect(Collectors.toList()));
+
+        countQuery = new EntityCountQuery(entityListFilter);
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(97, count);
+
+        edgeService.deleteEdgesByTenantId(tenantId);
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(0, count);
+    }
+
+    @Test
+    public void testCountHierarchicalEntitiesByEdgeSearchQuery() throws InterruptedException {
+        for (int i = 0; i < 5; i++) {
+            Edge edge = createEdge(i, "type" + i);
+            edge = edgeService.saveEdge(edge);
+            //TO make sure devices have different created time
+            Thread.sleep(1);
+
+            EntityRelation er = new EntityRelation();
+            er.setFrom(tenantId);
+            er.setTo(edge.getId());
+            er.setType("Manages");
+            er.setTypeGroup(RelationTypeGroup.COMMON);
+            relationService.saveRelation(tenantId, er);
+        }
+
+        EdgeSearchQueryFilter filter = new EdgeSearchQueryFilter();
+        filter.setRootEntity(tenantId);
+        filter.setDirection(EntitySearchDirection.FROM);
+        filter.setRelationType("Manages");
+
+        EntityCountQuery countQuery = new EntityCountQuery(filter);
+
+        long count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(5, count);
+
+        filter.setEdgeTypes(Arrays.asList("type0", "type1"));
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(2, count);
+    }
+
+    private Edge createEdge(int i, String type) {
+        Edge edge = new Edge();
+        edge.setTenantId(tenantId);
+        edge.setName("Edge" + i);
+        edge.setType(type);
+        edge.setLabel("EdgeLabel" + i);
+        edge.setSecret(StringUtils.randomAlphanumeric(20));
+        edge.setRoutingKey(StringUtils.randomAlphanumeric(20));
+        return edge;
+    }
+
     @Test
     public void testHierarchicalFindEntityDataWithAttributesByQuery() throws ExecutionException, InterruptedException {
+        doTestHierarchicalFindEntityDataWithAttributesByQuery(0, false);
+    }
+
+    @Test
+    public void testHierarchicalFindEntityDataWithAttributesByQueryWithLevel() throws ExecutionException, InterruptedException {
+        doTestHierarchicalFindEntityDataWithAttributesByQuery(2, false);
+    }
+
+    @Test
+    public void testHierarchicalFindEntityDataWithAttributesByQueryWithLastLevelOnly() throws ExecutionException, InterruptedException {
+        doTestHierarchicalFindEntityDataWithAttributesByQuery(2, true);
+    }
+
+    private void doTestHierarchicalFindEntityDataWithAttributesByQuery(final int maxLevel, final boolean fetchLastLevelOnly) throws ExecutionException, InterruptedException {
         List<Asset> assets = new ArrayList<>();
         List<Device> devices = new ArrayList<>();
         List<Long> temperatures = new ArrayList<>();
         List<Long> highTemperatures = new ArrayList<>();
-        createTestHierarchy(assets, devices, new ArrayList<>(), new ArrayList<>(), temperatures, highTemperatures);
+        createTestHierarchy(tenantId, assets, devices, new ArrayList<>(), new ArrayList<>(), temperatures, highTemperatures);
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < devices.size(); i++) {
             Device device = devices.get(i);
             attributeFutures.add(saveLongAttribute(device.getId(), "temperature", temperatures.get(i), DataConstants.CLIENT_SCOPE));
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         RelationsQueryFilter filter = new RelationsQueryFilter();
         filter.setRootEntity(tenantId);
         filter.setDirection(EntitySearchDirection.FROM);
         filter.setFilters(Collections.singletonList(new RelationEntityTypeFilter("Contains", Collections.singletonList(EntityType.DEVICE))));
+        filter.setMaxLevel(maxLevel);
+        filter.setFetchLastLevelOnly(fetchLastLevelOnly);
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
                 new EntityKey(EntityKeyType.ENTITY_FIELD, "createdTime"), EntityDataSortOrder.Direction.ASC
@@ -281,26 +394,133 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         deviceService.deleteDevicesByTenantId(tenantId);
     }
 
-    
+    @Test
+    public void testCountHierarchicalEntitiesByMultiRootQuery() throws InterruptedException {
+        List<Asset> buildings = new ArrayList<>();
+        List<Asset> apartments = new ArrayList<>();
+        Map<String, Map<UUID, String>> entityNameByTypeMap = new HashMap<>();
+        Map<UUID, UUID> childParentRelationMap = new HashMap<>();
+        createMultiRootHierarchy(buildings, apartments, entityNameByTypeMap, childParentRelationMap);
+
+        RelationsQueryFilter filter = new RelationsQueryFilter();
+        filter.setMultiRoot(true);
+        filter.setMultiRootEntitiesType(EntityType.ASSET);
+        filter.setMultiRootEntityIds(buildings.stream().map(IdBased::getId).map(d -> d.getId().toString()).collect(Collectors.toSet()));
+        filter.setDirection(EntitySearchDirection.FROM);
+
+        EntityCountQuery countQuery = new EntityCountQuery(filter);
+
+        long count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(63, count);
+
+        filter.setFilters(Collections.singletonList(new RelationEntityTypeFilter("AptToHeat", Collections.singletonList(EntityType.DEVICE))));
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(27, count);
+
+        filter.setMultiRootEntitiesType(EntityType.ASSET);
+        filter.setMultiRootEntityIds(apartments.stream().map(IdBased::getId).map(d -> d.getId().toString()).collect(Collectors.toSet()));
+        filter.setDirection(EntitySearchDirection.TO);
+        filter.setFilters(Lists.newArrayList(
+                new RelationEntityTypeFilter("buildingToApt", Collections.singletonList(EntityType.ASSET)),
+                new RelationEntityTypeFilter("AptToEnergy", Collections.singletonList(EntityType.DEVICE))));
+
+        count = entityService.countEntitiesByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), countQuery);
+        Assert.assertEquals(9, count);
+
+        deviceService.deleteDevicesByTenantId(tenantId);
+        assetService.deleteAssetsByTenantId(tenantId);
+
+    }
+
+    @Test
+    public void testMultiRootHierarchicalFindEntityDataWithAttributesByQuery() throws ExecutionException, InterruptedException {
+        List<Asset> buildings = new ArrayList<>();
+        List<Asset> apartments = new ArrayList<>();
+        Map<String, Map<UUID, String>> entityNameByTypeMap = new HashMap<>();
+        Map<UUID, UUID> childParentRelationMap = new HashMap<>();
+        createMultiRootHierarchy(buildings, apartments, entityNameByTypeMap, childParentRelationMap);
+
+        RelationsQueryFilter filter = new RelationsQueryFilter();
+        filter.setMultiRoot(true);
+        filter.setMultiRootEntitiesType(EntityType.ASSET);
+        filter.setMultiRootEntityIds(buildings.stream().map(IdBased::getId).map(d -> d.getId().toString()).collect(Collectors.toSet()));
+        filter.setDirection(EntitySearchDirection.FROM);
+
+        EntityDataSortOrder sortOrder = new EntityDataSortOrder(
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "createdTime"), EntityDataSortOrder.Direction.ASC
+        );
+        EntityDataPageLink pageLink = new EntityDataPageLink(10, 0, null, sortOrder);
+        List<EntityKey> entityFields = Lists.newArrayList(
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "name"),
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "parentId"),
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "type")
+        );
+        List<EntityKey> latestValues = Collections.singletonList(new EntityKey(EntityKeyType.ATTRIBUTE, "status"));
+
+        KeyFilter onlineStatusFilter = new KeyFilter();
+        onlineStatusFilter.setKey(new EntityKey(EntityKeyType.ENTITY_FIELD, "name"));
+        StringFilterPredicate predicate = new StringFilterPredicate();
+        predicate.setOperation(StringOperation.ENDS_WITH);
+        predicate.setValue(FilterPredicateValue.fromString("_1"));
+        onlineStatusFilter.setPredicate(predicate);
+        List<KeyFilter> keyFilters = Collections.singletonList(onlineStatusFilter);
+
+        EntityDataQuery query = new EntityDataQuery(filter, pageLink, entityFields, latestValues, keyFilters);
+        PageData<EntityData> data = entityService.findEntityDataByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), query);
+        List<EntityData> loadedEntities = new ArrayList<>(data.getData());
+        while (data.hasNext()) {
+            query = query.next();
+            data = entityService.findEntityDataByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), query);
+            loadedEntities.addAll(data.getData());
+        }
+
+        long expectedEntitiesCnt = entityNameByTypeMap.entrySet()
+                .stream()
+                .filter(e -> !e.getKey().equals("building"))
+                .flatMap(e -> e.getValue().entrySet().stream())
+                .map(Map.Entry::getValue)
+                .filter(e -> StringUtils.endsWith(e, "_1"))
+                .count();
+        Assert.assertEquals(expectedEntitiesCnt, loadedEntities.size());
+
+        Map<UUID, UUID> actualRelations = new HashMap<>();
+        loadedEntities.forEach(ed -> {
+            UUID parentId = UUID.fromString(ed.getLatest().get(EntityKeyType.ENTITY_FIELD).get("parentId").getValue());
+            UUID entityId = ed.getEntityId().getId();
+            Assert.assertEquals(childParentRelationMap.get(entityId), parentId);
+            actualRelations.put(entityId, parentId);
+
+            String entityType = ed.getLatest().get(EntityKeyType.ENTITY_FIELD).get("type").getValue();
+            String actualEntityName = ed.getLatest().get(EntityKeyType.ENTITY_FIELD).get("name").getValue();
+            String expectedEntityName = entityNameByTypeMap.get(entityType).get(entityId);
+            Assert.assertEquals(expectedEntityName, actualEntityName);
+        });
+
+        deviceService.deleteDevicesByTenantId(tenantId);
+        assetService.deleteAssetsByTenantId(tenantId);
+    }
+
     @Test
     public void testHierarchicalFindDevicesWithAttributesByQuery() throws ExecutionException, InterruptedException {
         List<Asset> assets = new ArrayList<>();
         List<Device> devices = new ArrayList<>();
         List<Long> temperatures = new ArrayList<>();
         List<Long> highTemperatures = new ArrayList<>();
-        createTestHierarchy(assets, devices, new ArrayList<>(), new ArrayList<>(), temperatures, highTemperatures);
+        createTestHierarchy(tenantId, assets, devices, new ArrayList<>(), new ArrayList<>(), temperatures, highTemperatures);
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < devices.size(); i++) {
             Device device = devices.get(i);
             attributeFutures.add(saveLongAttribute(device.getId(), "temperature", temperatures.get(i), DataConstants.CLIENT_SCOPE));
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         DeviceSearchQueryFilter filter = new DeviceSearchQueryFilter();
         filter.setRootEntity(tenantId);
         filter.setDirection(EntitySearchDirection.FROM);
         filter.setRelationType("Contains");
+        filter.setMaxLevel(2);
+        filter.setFetchLastLevelOnly(true);
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
                 new EntityKey(EntityKeyType.ENTITY_FIELD, "createdTime"), EntityDataSortOrder.Direction.ASC
@@ -354,21 +574,21 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         deviceService.deleteDevicesByTenantId(tenantId);
     }
 
-    
+
     @Test
     public void testHierarchicalFindAssetsWithAttributesByQuery() throws ExecutionException, InterruptedException {
         List<Asset> assets = new ArrayList<>();
         List<Device> devices = new ArrayList<>();
         List<Long> consumptions = new ArrayList<>();
         List<Long> highConsumptions = new ArrayList<>();
-        createTestHierarchy(assets, devices, consumptions, highConsumptions, new ArrayList<>(), new ArrayList<>());
+        createTestHierarchy(tenantId, assets, devices, consumptions, highConsumptions, new ArrayList<>(), new ArrayList<>());
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < assets.size(); i++) {
             Asset asset = assets.get(i);
             attributeFutures.add(saveLongAttribute(asset.getId(), "consumption", consumptions.get(i), DataConstants.SERVER_SCOPE));
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         AssetSearchQueryFilter filter = new AssetSearchQueryFilter();
         filter.setRootEntity(tenantId);
@@ -426,8 +646,8 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         deviceService.deleteDevicesByTenantId(tenantId);
     }
 
-    private void createTestHierarchy(List<Asset> assets, List<Device> devices, List<Long> consumptions, List<Long> highConsumptions, List<Long> temperatures, List<Long> highTemperatures) throws InterruptedException {
-        for (int i = 0; i < 5; i++) {
+    private void createTestHierarchy(TenantId tenantId, List<Asset> assets, List<Device> devices, List<Long> consumptions, List<Long> highConsumptions, List<Long> temperatures, List<Long> highTemperatures) throws InterruptedException {
+        for (int i = 0; i < ENTITY_COUNT; i++) {
             Asset asset = new Asset();
             asset.setTenantId(tenantId);
             asset.setName("Asset" + i);
@@ -437,18 +657,19 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
             //TO make sure devices have different created time
             Thread.sleep(1);
             assets.add(asset);
-            EntityRelation er = new EntityRelation();
-            er.setFrom(tenantId);
-            er.setTo(asset.getId());
-            er.setType("Manages");
-            er.setTypeGroup(RelationTypeGroup.COMMON);
-            relationService.saveRelation(tenantId, er);
+            createRelation(tenantId, "Manages", tenantId, asset.getId());
             long consumption = (long) (Math.random() * 100);
             consumptions.add(consumption);
             if (consumption > 50) {
                 highConsumptions.add(consumption);
             }
-            for (int j = 0; j < 5; j++) {
+
+            //tenant -> asset : one-to-one but many edges
+            for (int n = 0; n < ENTITY_COUNT; n++) {
+                createRelation(tenantId, "UseCase-" + n, tenantId, asset.getId());
+            }
+
+            for (int j = 0; j < ENTITY_COUNT; j++) {
                 Device device = new Device();
                 device.setTenantId(tenantId);
                 device.setName("A" + i + "Device" + j);
@@ -458,22 +679,125 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
                 //TO make sure devices have different created time
                 Thread.sleep(1);
                 devices.add(device);
-                er = new EntityRelation();
-                er.setFrom(asset.getId());
-                er.setTo(device.getId());
-                er.setType("Contains");
-                er.setTypeGroup(RelationTypeGroup.COMMON);
-                relationService.saveRelation(tenantId, er);
+                createRelation(tenantId, "Contains", asset.getId(), device.getId());
                 long temperature = (long) (Math.random() * 100);
                 temperatures.add(temperature);
                 if (temperature > 45) {
                     highTemperatures.add(temperature);
                 }
+
+                //asset -> device : one-to-one but many edges
+                for (int n = 0; n < ENTITY_COUNT; n++) {
+                    createRelation(tenantId, "UseCase-" + n, asset.getId(), device.getId());
+                }
             }
+        }
+
+        //asset -> device one-to-many shared with other assets
+        for (int n = 0; n < devices.size(); n = n + ENTITY_COUNT) {
+            createRelation(tenantId, "SharedWithAsset0", assets.get(0).getId(), devices.get(n).getId());
+        }
+
+        createManyCustomRelationsBetweenTwoNodes(tenantId, "UseCase", assets, devices);
+        createHorizontalRingRelations(tenantId, "Ring(Loop)-Ast", assets);
+        createLoopRelations(tenantId, "Loop-Tnt-Ast-Dev", tenantId, assets.get(0).getId(), devices.get(0).getId());
+        createLoopRelations(tenantId, "Loop-Tnt-Ast", tenantId, assets.get(1).getId());
+        createLoopRelations(tenantId, "Loop-Ast-Tnt-Ast", assets.get(2).getId(), tenantId, assets.get(3).getId());
+
+        //printAllRelations();
+    }
+
+    private ResultSetExtractor<List<List<String>>> getListResultSetExtractor() {
+        return rs -> {
+            List<List<String>> list = new ArrayList<>();
+            final int columnCount = rs.getMetaData().getColumnCount();
+            List<String> columns = new ArrayList<>(columnCount);
+            for (int i = 1; i <= columnCount; i++) {
+                columns.add(rs.getMetaData().getColumnName(i));
+            }
+            list.add(columns);
+            while (rs.next()) {
+                List<String> data = new ArrayList<>(columnCount);
+                for (int i = 1; i <= columnCount; i++) {
+                    data.add(rs.getString(i));
+                }
+                list.add(data);
+            }
+            return list;
+        };
+    }
+
+    /*
+     * This useful to reproduce exact data in the PostgreSQL and play around with pgadmin query and analyze tool
+     * */
+    private void printAllRelations() {
+        System.out.println("" +
+                "DO\n" +
+                "$$\n" +
+                "    DECLARE\n" +
+                "        someint integer;\n" +
+                "    BEGIN\n" +
+                "        DROP TABLE IF EXISTS relation_test;\n" +
+                "        CREATE TABLE IF NOT EXISTS relation_test\n" +
+                "        (\n" +
+                "            from_id             uuid,\n" +
+                "            from_type           varchar(255),\n" +
+                "            to_id               uuid,\n" +
+                "            to_type             varchar(255),\n" +
+                "            relation_type_group varchar(255),\n" +
+                "            relation_type       varchar(255),\n" +
+                "            additional_info     varchar,\n" +
+                "            CONSTRAINT relation_test_pkey PRIMARY KEY (from_id, from_type, relation_type_group, relation_type, to_id, to_type)\n" +
+                "        );");
+
+        relationRepository.findAll().forEach(r ->
+                System.out.printf("INSERT INTO relation_test (from_id, from_type, to_id, to_type, relation_type_group, relation_type, additional_info)" +
+                                " VALUES (%s, %s, %s, %s, %s, %s, %s);\n",
+                        quote(r.getFromId()), quote(r.getFromType()), quote(r.getToId()), quote(r.getToType()),
+                        quote(r.getRelationTypeGroup()), quote(r.getRelationType()), quote(r.getAdditionalInfo()))
+        );
+
+        System.out.println("" +
+                "    END\n" +
+                "$$;");
+    }
+
+    private String quote(Object s) {
+        return s == null ? null : "'" + s + "'";
+    }
+
+    void createLoopRelations(TenantId tenantId, String type, EntityId... ids) {
+        assertThat("ids lenght", ids.length, Matchers.greaterThanOrEqualTo(1));
+        //chain all from the head to the tail
+        for (int i = 1; i < ids.length; i++) {
+            relationService.saveRelation(tenantId, new EntityRelation(ids[i - 1], ids[i], type, RelationTypeGroup.COMMON));
+        }
+        //chain tail -> head
+        relationService.saveRelation(tenantId, new EntityRelation(ids[ids.length - 1], ids[0], type, RelationTypeGroup.COMMON));
+    }
+
+    void createHorizontalRingRelations(TenantId tenantId, String type, List<Asset> assets) {
+        createLoopRelations(tenantId, type, assets.stream().map(Asset::getId).toArray(EntityId[]::new));
+    }
+
+    void createManyCustomRelationsBetweenTwoNodes(TenantId tenantId, String type, List<Asset> assets, List<Device> devices) {
+        for (int i = 1; i <= 5; i++) {
+            final String typeI = type + i;
+            createOneToManyRelations(tenantId, typeI, tenantId, assets.stream().map(Asset::getId).collect(Collectors.toList()));
+            assets.forEach(asset ->
+                    createOneToManyRelations(tenantId, typeI, asset.getId(), devices.stream().map(Device::getId).collect(Collectors.toList())));
         }
     }
 
-    
+    void createOneToManyRelations(TenantId tenantId, String type, EntityId from, List<EntityId> toIds) {
+        toIds.forEach(toId -> createRelation(tenantId, type, from, toId));
+    }
+
+    void createRelation(TenantId tenantId, String type, EntityId from, EntityId toId) {
+        relationService.saveRelation(tenantId, new EntityRelation(from, toId, type, RelationTypeGroup.COMMON));
+    }
+
+
     @Test
     public void testSimpleFindEntityDataByQuery() throws InterruptedException {
         List<Device> devices = new ArrayList<>();
@@ -489,7 +813,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         }
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -542,6 +866,509 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
     }
 
     @Test
+    public void testFindEntityDataByQuery_operationEqual_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.EQUAL, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationNotEqual() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = devices.get(2).getLabel();
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.NOT_EQUAL, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size() - 1, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationNotEqual_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.NOT_EQUAL, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationStartsWith_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.STARTS_WITH, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationEndsWith_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.ENDS_WITH, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationContains_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.CONTAINS, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationNotContains() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "label-";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.NOT_CONTAINS, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(2, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_operationNotContains_emptySearchQuery() {
+        List<Device> devices = createMockDevices(10);
+        devices.get(0).setLabel("");
+        devices.get(1).setLabel(null);
+        devices.forEach(deviceService::saveDevice);
+
+        String searchQuery = "";
+        EntityDataQuery query = createDeviceSearchQuery("label", StringOperation.NOT_CONTAINS, searchQuery);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_entity_name_starts_with() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device " + i + " test");
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        EntityNameFilter deviceTypeFilter = new EntityNameFilter();
+        deviceTypeFilter.setEntityType(EntityType.DEVICE);
+        deviceTypeFilter.setEntityNameFilter("Device");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("Device%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("%Device%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("%Device");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_entity_name_ends_with() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device " + i + " test");
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        EntityNameFilter deviceTypeFilter = new EntityNameFilter();
+        deviceTypeFilter.setEntityType(EntityType.DEVICE);
+        deviceTypeFilter.setEntityNameFilter("%test");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("%test%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_entity_name_contains() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device test" + i);
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        EntityNameFilter deviceTypeFilter = new EntityNameFilter();
+        deviceTypeFilter.setEntityType(EntityType.DEVICE);
+        deviceTypeFilter.setEntityNameFilter("%test%");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        deviceTypeFilter.setEntityNameFilter("%test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_device_type_name_starts_with() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device " + i + " test");
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        DeviceTypeFilter deviceTypeFilter = new DeviceTypeFilter();
+        deviceTypeFilter.setDeviceType("default");
+        deviceTypeFilter.setDeviceNameFilter("Device");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("Device%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("%Device%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("%Device");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_device_type_name_ends_with() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device " + i + " test");
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        DeviceTypeFilter deviceTypeFilter = new DeviceTypeFilter();
+        deviceTypeFilter.setDeviceType("default");
+        deviceTypeFilter.setDeviceNameFilter("%test");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("%test%");
+
+        result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_device_type_name_contains() {
+        List<Device> devices = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Device device = new Device();
+            device.setTenantId(tenantId);
+            device.setName("Device test" + i);
+            device.setType("default");
+            devices.add(device);
+        }
+
+        devices.forEach(deviceService::saveDevice);
+
+        DeviceTypeFilter deviceTypeFilter = new DeviceTypeFilter();
+        deviceTypeFilter.setDeviceType("default");
+        deviceTypeFilter.setDeviceNameFilter("%test%");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(deviceTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(devices.size(), result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        deviceTypeFilter.setDeviceNameFilter("%test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_asset_type_name_starts_with() {
+        List<Asset> assets = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Asset asset = new Asset();
+            asset.setTenantId(tenantId);
+            asset.setName("Asset " + i + " test");
+            asset.setType("default");
+            assets.add(asset);
+        }
+
+        assets.forEach(assetService::saveAsset);
+
+        AssetTypeFilter assetTypeFilter = new AssetTypeFilter();
+        assetTypeFilter.setAssetType("default");
+        assetTypeFilter.setAssetNameFilter("Asset");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(assetTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("Asset%");
+
+        result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("%Asset%");
+
+        result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("%Asset");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_asset_type_name_ends_with() {
+        List<Asset> assets = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Asset asset = new Asset();
+            asset.setTenantId(tenantId);
+            asset.setName("Asset " + i + " test");
+            asset.setType("default");
+            assets.add(asset);
+        }
+
+        assets.forEach(assetService::saveAsset);
+
+        AssetTypeFilter assetTypeFilter = new AssetTypeFilter();
+        assetTypeFilter.setAssetType("default");
+        assetTypeFilter.setAssetNameFilter("%test");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(assetTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("%test%");
+
+        result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    public void testFindEntityDataByQuery_filter_asset_type_name_contains() {
+        List<Asset> assets = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            Asset asset = new Asset();
+            asset.setTenantId(tenantId);
+            asset.setName("Asset test" + i);
+            asset.setType("default");
+            assets.add(asset);
+        }
+
+        assets.forEach(assetService::saveAsset);
+
+        AssetTypeFilter assetTypeFilter = new AssetTypeFilter();
+        assetTypeFilter.setAssetType("default");
+        assetTypeFilter.setAssetNameFilter("%test%");
+
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, null);
+
+        EntityDataQuery query = new EntityDataQuery(assetTypeFilter, pageLink, null, null, null);
+
+        PageData<EntityData> result = searchEntities(query);
+        assertEquals(assets.size(), result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("test%");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+
+        assetTypeFilter.setAssetNameFilter("%test");
+
+        result = searchEntities(query);
+        assertEquals(0, result.getTotalElements());
+    }
+
+    private PageData<EntityData> searchEntities(EntityDataQuery query) {
+        return entityService.findEntityDataByQuery(tenantId, new CustomerId(CustomerId.NULL_UUID), query);
+    }
+
+    private EntityDataQuery createDeviceSearchQuery(String deviceField, StringOperation operation, String searchQuery) {
+        DeviceTypeFilter deviceTypeFilter = new DeviceTypeFilter();
+        deviceTypeFilter.setDeviceTypes(List.of("default"));
+        deviceTypeFilter.setDeviceNameFilter("");
+
+        EntityDataSortOrder sortOrder = new EntityDataSortOrder(
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "createdTime"), EntityDataSortOrder.Direction.ASC
+        );
+        EntityDataPageLink pageLink = new EntityDataPageLink(1000, 0, null, sortOrder);
+        List<EntityKey> entityFields = Arrays.asList(
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "name"),
+                new EntityKey(EntityKeyType.ENTITY_FIELD, "label")
+        );
+
+        List<KeyFilter> keyFilters = createStringKeyFilters(deviceField, EntityKeyType.ENTITY_FIELD, operation, searchQuery);
+
+        return new EntityDataQuery(deviceTypeFilter, pageLink, entityFields, null, keyFilters);
+    }
+
+    private List<Device> createMockDevices(int count) {
+        return Stream.iterate(1, i -> i + 1)
+                .map(i -> {
+                    Device device = new Device();
+                    device.setTenantId(tenantId);
+                    device.setName("Device " + i);
+                    device.setType("default");
+                    device.setLabel("label-" + RandomUtils.nextInt(100, 10000));
+                    return device;
+                })
+                .limit(count)
+                .collect(Collectors.toList());
+    }
+
+    @Test
     public void testFindEntityDataByQueryWithAttributes() throws ExecutionException, InterruptedException {
 
         List<EntityKeyType> attributesEntityTypes = new ArrayList<>(Arrays.asList(EntityKeyType.CLIENT_ATTRIBUTE, EntityKeyType.SHARED_ATTRIBUTE, EntityKeyType.SERVER_ATTRIBUTE));
@@ -565,17 +1392,17 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
             }
         }
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < devices.size(); i++) {
             Device device = devices.get(i);
             for (String currentScope : DataConstants.allScopes()) {
                 attributeFutures.add(saveLongAttribute(device.getId(), "temperature", temperatures.get(i), currentScope));
             }
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -630,7 +1457,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
     }
 
     @Test
-    public void testBuildNumericPredicateQueryOperations() throws ExecutionException, InterruptedException{
+    public void testBuildNumericPredicateQueryOperations() throws ExecutionException, InterruptedException {
 
         List<Device> devices = new ArrayList<>();
         List<Long> temperatures = new ArrayList<>();
@@ -667,15 +1494,15 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
             }
         }
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < devices.size(); i++) {
             Device device = devices.get(i);
             attributeFutures.add(saveLongAttribute(device.getId(), "temperature", temperatures.get(i), DataConstants.CLIENT_SCOPE));
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -790,7 +1617,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
 
         deviceService.deleteDevicesByTenantId(tenantId);
     }
-    
+
     @Test
     public void testFindEntityDataByQueryWithTimeseries() throws ExecutionException, InterruptedException {
 
@@ -818,10 +1645,10 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
             Device device = devices.get(i);
             timeseriesFutures.add(saveLongTimeseries(device.getId(), "temperature", temperatures.get(i)));
         }
-        Futures.successfulAsList(timeseriesFutures).get();
+        Futures.allAsList(timeseriesFutures).get();
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -881,7 +1708,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
     }
 
     @Test
-    public void testBuildStringPredicateQueryOperations() throws ExecutionException, InterruptedException{
+    public void testBuildStringPredicateQueryOperations() throws ExecutionException, InterruptedException {
 
         List<Device> devices = new ArrayList<>();
         List<String> attributeStrings = new ArrayList<>();
@@ -901,11 +1728,11 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
             devices.add(deviceService.saveDevice(device));
             //TO make sure devices have different created time
             Thread.sleep(1);
-            List<StringFilterPredicate.StringOperation> operationValues= Arrays.asList(StringFilterPredicate.StringOperation.values());
+            List<StringFilterPredicate.StringOperation> operationValues = Arrays.asList(StringFilterPredicate.StringOperation.values());
             StringFilterPredicate.StringOperation operation = operationValues.get(new Random().nextInt(operationValues.size()));
             String operationName = operation.name();
             attributeStrings.add(operationName);
-            switch(operation){
+            switch (operation) {
                 case EQUAL:
                     equalStrings.add(operationName);
                     notContainsStrings.add(operationName);
@@ -934,18 +1761,26 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
                     notEqualStrings.add(operationName);
                     containsStrings.add(operationName);
                     break;
+                case IN:
+                    notEqualStrings.add(operationName);
+                    notContainsStrings.add(operationName);
+                    break;
+                case NOT_IN:
+                    notEqualStrings.add(operationName);
+                    notContainsStrings.add(operationName);
+                    break;
             }
         }
 
-        List<ListenableFuture<List<Void>>> attributeFutures = new ArrayList<>();
+        List<ListenableFuture<List<String>>> attributeFutures = new ArrayList<>();
         for (int i = 0; i < devices.size(); i++) {
             Device device = devices.get(i);
             attributeFutures.add(saveStringAttribute(device.getId(), "attributeString", attributeStrings.get(i), DataConstants.CLIENT_SCOPE));
         }
-        Futures.successfulAsList(attributeFutures).get();
+        Futures.allAsList(attributeFutures).get();
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -1061,7 +1896,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
     }
 
     @Test
-    public void testBuildStringPredicateQueryOperationsForEntityType() throws ExecutionException, InterruptedException{
+    public void testBuildStringPredicateQueryOperationsForEntityType() throws ExecutionException, InterruptedException {
 
         List<Device> devices = new ArrayList<>();
 
@@ -1077,7 +1912,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         }
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(
@@ -1178,7 +2013,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
     }
 
     @Test
-    public void testBuildSimplePredicateQueryOperations() throws InterruptedException{
+    public void testBuildSimplePredicateQueryOperations() throws InterruptedException {
 
         List<Device> devices = new ArrayList<>();
 
@@ -1194,7 +2029,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         }
 
         DeviceTypeFilter filter = new DeviceTypeFilter();
-        filter.setDeviceType("default");
+        filter.setDeviceTypes(List.of("default"));
         filter.setDeviceNameFilter("");
 
         EntityDataSortOrder sortOrder = new EntityDataSortOrder(new EntityKey(EntityKeyType.ENTITY_FIELD, "name"), EntityDataSortOrder.Direction.DESC);
@@ -1251,7 +2086,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         return loadedEntities;
     }
 
-    private List<KeyFilter> createStringKeyFilters(String key, EntityKeyType keyType, StringFilterPredicate.StringOperation operation, String value){
+    private List<KeyFilter> createStringKeyFilters(String key, EntityKeyType keyType, StringFilterPredicate.StringOperation operation, String value) {
         KeyFilter filter = new KeyFilter();
         filter.setKey(new EntityKey(keyType, key));
         StringFilterPredicate predicate = new StringFilterPredicate();
@@ -1262,7 +2097,7 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         return Collections.singletonList(filter);
     }
 
-    private KeyFilter createNumericKeyFilter(String key, EntityKeyType keyType, NumericFilterPredicate.NumericOperation operation, double value){
+    private KeyFilter createNumericKeyFilter(String key, EntityKeyType keyType, NumericFilterPredicate.NumericOperation operation, double value) {
         KeyFilter filter = new KeyFilter();
         filter.setKey(new EntityKey(keyType, key));
         NumericFilterPredicate predicate = new NumericFilterPredicate();
@@ -1273,13 +2108,13 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         return filter;
     }
 
-    private ListenableFuture<List<Void>> saveLongAttribute(EntityId entityId, String key, long value, String scope) {
+    private ListenableFuture<List<String>> saveLongAttribute(EntityId entityId, String key, long value, String scope) {
         KvEntry attrValue = new LongDataEntry(key, value);
         AttributeKvEntry attr = new BaseAttributeKvEntry(attrValue, 42L);
         return attributesService.save(SYSTEM_TENANT_ID, entityId, scope, Collections.singletonList(attr));
     }
 
-    private ListenableFuture<List<Void>> saveStringAttribute(EntityId entityId, String key, String value, String scope) {
+    private ListenableFuture<List<String>> saveStringAttribute(EntityId entityId, String key, String value, String scope) {
         KvEntry attrValue = new StringDataEntry(key, value);
         AttributeKvEntry attr = new BaseAttributeKvEntry(attrValue, 42L);
         return attributesService.save(SYSTEM_TENANT_ID, entityId, scope, Collections.singletonList(attr));
@@ -1292,5 +2127,77 @@ public abstract class BaseEntityServiceTest extends AbstractServiceTest {
         KvEntry telemetryValue = new DoubleDataEntry(key, value);
         BasicTsKvEntry timeseries = new BasicTsKvEntry(42L, telemetryValue);
         return timeseriesService.save(SYSTEM_TENANT_ID, entityId, timeseries);
+    }
+
+    private void createMultiRootHierarchy(List<Asset> buildings, List<Asset> apartments,
+                                          Map<String, Map<UUID, String>> entityNameByTypeMap,
+                                          Map<UUID, UUID> childParentRelationMap) throws InterruptedException {
+        for (int k = 0; k < 3; k++) {
+            Asset building = new Asset();
+            building.setTenantId(tenantId);
+            building.setName("Building _" + k);
+            building.setType("building");
+            building.setLabel("building label" + k);
+            building = assetService.saveAsset(building);
+            buildings.add(building);
+            entityNameByTypeMap.computeIfAbsent(building.getType(), n -> new HashMap<>()).put(building.getId().getId(), building.getName());
+
+            for (int i = 0; i < 3; i++) {
+                Asset asset = new Asset();
+                asset.setTenantId(tenantId);
+                asset.setName("Apt " + k + "_" + i);
+                asset.setType("apartment");
+                asset.setLabel("apartment " + i);
+                asset = assetService.saveAsset(asset);
+                //TO make sure devices have different created time
+                Thread.sleep(1);
+                entityNameByTypeMap.computeIfAbsent(asset.getType(), n -> new HashMap<>()).put(asset.getId().getId(), asset.getName());
+                apartments.add(asset);
+                EntityRelation er = new EntityRelation();
+                er.setFrom(building.getId());
+                er.setTo(asset.getId());
+                er.setType("buildingToApt");
+                er.setTypeGroup(RelationTypeGroup.COMMON);
+                relationService.saveRelation(tenantId, er);
+                childParentRelationMap.put(asset.getUuidId(), building.getUuidId());
+                for (int j = 0; j < 3; j++) {
+                    Device device = new Device();
+                    device.setTenantId(tenantId);
+                    device.setName("Heat" + k + "_" + i + "_" + j);
+                    device.setType("heatmeter");
+                    device.setLabel("heatmeter" + (int) (Math.random() * 1000));
+                    device = deviceService.saveDevice(device);
+                    //TO make sure devices have different created time
+                    Thread.sleep(1);
+                    entityNameByTypeMap.computeIfAbsent(device.getType(), n -> new HashMap<>()).put(device.getId().getId(), device.getName());
+                    er = new EntityRelation();
+                    er.setFrom(asset.getId());
+                    er.setTo(device.getId());
+                    er.setType("AptToHeat");
+                    er.setTypeGroup(RelationTypeGroup.COMMON);
+                    relationService.saveRelation(tenantId, er);
+                    childParentRelationMap.put(device.getUuidId(), asset.getUuidId());
+                }
+
+                for (int j = 0; j < 3; j++) {
+                    Device device = new Device();
+                    device.setTenantId(tenantId);
+                    device.setName("Energy" + k + "_" + i + "_" + j);
+                    device.setType("energymeter");
+                    device.setLabel("energymeter" + (int) (Math.random() * 1000));
+                    device = deviceService.saveDevice(device);
+                    //TO make sure devices have different created time
+                    Thread.sleep(1);
+                    entityNameByTypeMap.computeIfAbsent(device.getType(), n -> new HashMap<>()).put(device.getId().getId(), device.getName());
+                    er = new EntityRelation();
+                    er.setFrom(asset.getId());
+                    er.setTo(device.getId());
+                    er.setType("AptToEnergy");
+                    er.setTypeGroup(RelationTypeGroup.COMMON);
+                    relationService.saveRelation(tenantId, er);
+                    childParentRelationMap.put(device.getUuidId(), asset.getUuidId());
+                }
+            }
+        }
     }
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,13 +16,11 @@
 
 import * as CanvasGauges from 'canvas-gauges';
 import { FontStyle, FontWeight } from '@home/components/widget/lib/settings.models';
-import * as tinycolor_ from 'tinycolor2';
+import tinycolor from 'tinycolor2';
 import { ColorFormats } from 'tinycolor2';
 import { isDefined, isDefinedAndNotNull, isString, isUndefined, padValue } from '@core/utils';
 import GenericOptions = CanvasGauges.GenericOptions;
 import BaseGauge = CanvasGauges.BaseGauge;
-
-const tinycolor = tinycolor_;
 
 export type GaugeType = 'arc' | 'donut' | 'horizontalBar' | 'verticalBar';
 
@@ -47,7 +45,6 @@ export interface CanvasDigitalGaugeOptions extends GenericOptions {
   gaugeColor?: string;
   levelColors?: levelColors;
   symbol?: string;
-  label?: string;
   hideValue?: boolean;
   hideMinMax?: boolean;
   fontTitle?: string;
@@ -86,6 +83,9 @@ export interface CanvasDigitalGaugeOptions extends GenericOptions {
   colorTicks?: string;
   tickWidth?: number;
 
+  labelTimestamp?: string
+  unitTitle?: string;
+  showUnitTitle?: boolean;
   showTimestamp?: boolean;
 }
 
@@ -100,7 +100,6 @@ const defaultDigitalGaugeOptions: CanvasDigitalGaugeOptions = { ...GenericOption
     levelColors: ['blue'],
 
     symbol: '',
-    label: '',
     hideValue: false,
     hideMinMax: false,
 
@@ -145,6 +144,7 @@ interface DigitalGaugeCanvasRenderingContext2D extends CanvasRenderingContext2D 
 }
 
 interface BarDimensions {
+  timeseriesLabelY?: number;
   baseX: number;
   baseY: number;
   width: number;
@@ -276,7 +276,6 @@ export class CanvasDigitalGauge extends BaseGauge {
         }
       }
     }
-
     options.ticksValue = [];
     for (const tick of options.ticks) {
       if (tick !== null) {
@@ -363,7 +362,7 @@ export class CanvasDigitalGauge extends BaseGauge {
       const options = this.options as CanvasDigitalGaugeOptions;
       const elementClone = canvas.elementClone as HTMLCanvasElementClone;
       if (!elementClone.initialized) {
-        const context = canvas.contextClone;
+        const context: DigitalGaugeCanvasRenderingContext2D = canvas.contextClone;
 
         // clear the cache
         context.clearRect(x, y, w, h);
@@ -379,8 +378,8 @@ export class CanvasDigitalGauge extends BaseGauge {
 
         drawDigitalTitle(context, options);
 
-        if (!options.showTimestamp) {
-          drawDigitalLabel(context, options);
+        if (options.showUnitTitle) {
+          drawDigitalLabel(context, options, options.unitTitle, 'labelY');
         }
 
         drawDigitalMinMax(context, options);
@@ -401,15 +400,13 @@ export class CanvasDigitalGauge extends BaseGauge {
         const context = this.contextValueClone;
         // clear the cache
         context.clearRect(x, y, w, h);
-        context.save();
 
         context.drawImage(canvas.elementClone, x, y, w, h);
-        context.save();
 
         drawDigitalValue(context, options, this.elementValueClone.renderedValue);
 
         if (options.showTimestamp) {
-          drawDigitalLabel(context, options);
+          drawDigitalLabel(context, options, options.labelTimestamp, 'timeseriesLabelY');
           this.elementValueClone.renderedTimestamp = this.timestamp;
         }
 
@@ -427,10 +424,8 @@ export class CanvasDigitalGauge extends BaseGauge {
         const context = this.contextProgressClone;
         // clear the cache
         context.clearRect(x, y, w, h);
-        context.save();
 
         context.drawImage(this.elementValueClone, x, y, w, h);
-        context.save();
 
         if (Number(fixedProgress) > 0) {
           drawProgress(context, options, progress);
@@ -444,10 +439,8 @@ export class CanvasDigitalGauge extends BaseGauge {
 
       // clear the canvas
       canvas.context.clearRect(x, y, w, h);
-      canvas.context.save();
 
       canvas.context.drawImage(this.elementProgressClone, x, y, w, h);
-      canvas.context.save();
 
       // @ts-ignore
       super.draw();
@@ -571,11 +564,12 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
 
   if (options.gaugeType === 'donut') {
     bd.fontValueBaseline = 'middle';
-    if (options.label && options.label.length > 0) {
+    if (options.showUnitTitle || options.showTimestamp) {
       const valueHeight = determineFontHeight(options, 'Value', bd.fontSizeFactor).height;
       const labelHeight = determineFontHeight(options, 'Label', bd.fontSizeFactor).height;
       const total = valueHeight + labelHeight;
       bd.labelY = bd.Cy + total / 2;
+      bd.timeseriesLabelY = determineTimeseriesLabelY(options, bd.labelY, bd.fontSizeFactor)
       bd.valueY = bd.Cy - total / 2 + valueHeight / 2;
     } else {
       bd.valueY = bd.Cy;
@@ -584,6 +578,7 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
     bd.titleY = bd.Cy - bd.Ro - 12 * bd.fontSizeFactor;
     bd.valueY = bd.Cy;
     bd.labelY = bd.Cy + (8 + options.fontLabelSize) * bd.fontSizeFactor;
+    bd.timeseriesLabelY = determineTimeseriesLabelY(options, bd.labelY, bd.fontSizeFactor)
     bd.minY = bd.maxY = bd.labelY;
     if (options.roundedLineCap) {
       bd.minY += bd.strokeWidth / 2;
@@ -602,8 +597,9 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
     bd.barTop = bd.valueY + 8 * bd.fontSizeFactor;
     bd.barBottom = bd.barTop + bd.strokeWidth;
 
-    if (options.hideMinMax && options.label === '') {
+    if (options.hideMinMax && !options.showUnitTitle && !options.showTimestamp) {
       bd.labelY = bd.barBottom;
+      bd.timeseriesLabelY = determineTimeseriesLabelY(options, bd.labelY, bd.fontSizeFactor)
       bd.barLeft = bd.origBaseX + options.fontMinMaxSize / 3 * bd.fontSizeFactor;
       bd.barRight = bd.origBaseX + w + /*bd.width*/ -options.fontMinMaxSize / 3 * bd.fontSizeFactor;
     } else {
@@ -616,6 +612,7 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
       bd.barLeft = bd.minX;
       bd.barRight = bd.maxX;
       bd.labelY = bd.barBottom + (8 + options.fontLabelSize) * bd.fontSizeFactor;
+      bd.timeseriesLabelY = determineTimeseriesLabelY(options, bd.labelY, bd.fontSizeFactor)
       bd.minY = bd.maxY = bd.labelY;
     }
   } else if (options.gaugeType === 'verticalBar') {
@@ -625,14 +622,14 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
     bd.valueY = bd.titleBottom + (options.hideValue ? 0 : options.fontValueSize * bd.fontSizeFactor);
     bd.barTop = bd.valueY + 8 * bd.fontSizeFactor;
 
-    bd.labelY = bd.baseY + bd.height - 16;
-    if (options.label === '') {
-      bd.barBottom = bd.labelY;
+    bd.labelY = bd.baseY + bd.height;
+    bd.timeseriesLabelY = determineTimeseriesLabelY(options, bd.labelY, bd.fontSizeFactor)
+    if (options.showUnitTitle || options.showTimestamp) {
+      bd.barBottom = bd.labelY - options.fontLabelSize * bd.fontSizeFactor;
     } else {
-      bd.barBottom = bd.labelY - (8 + options.fontLabelSize) * bd.fontSizeFactor;
+      bd.barBottom = bd.labelY
     }
-    bd.minX = bd.maxX =
-      bd.baseX + bd.width / 2 + bd.strokeWidth / 2 + options.fontMinMaxSize / 3 * bd.fontSizeFactor;
+    bd.minX = bd.maxX = bd.baseX + bd.width / 2 + bd.strokeWidth / 2 + options.fontMinMaxSize / 3 * bd.fontSizeFactor;
     bd.minY = bd.barBottom;
     bd.maxY = bd.barTop;
     bd.fontMinMaxBaseline = 'middle';
@@ -652,16 +649,24 @@ function barDimensions(context: DigitalGaugeCanvasRenderingContext2D,
     }
     let dashCount = Math.floor(circumference / (options.dashThickness * bd.fontSizeFactor));
     if (options.gaugeType === 'donut') {
-      // tslint:disable-next-line:no-bitwise
+      // eslint-disable-next-line no-bitwise
       dashCount = (dashCount | 1) - 1;
     } else {
-      // tslint:disable-next-line:no-bitwise
+      // eslint-disable-next-line no-bitwise
       dashCount = (dashCount - 1) | 1;
     }
     bd.dashLength = Math.ceil(circumference / dashCount);
   }
 
   return bd;
+}
+
+function determineTimeseriesLabelY(options: CanvasDigitalGaugeOptions, labelY: number, fontSizeFactor: number){
+  if (options.showUnitTitle) {
+    return  labelY + options.fontLabelSize * fontSizeFactor * 1.2;
+  } else {
+    return labelY;
+  }
 }
 
 function determineFontHeight(options: CanvasDigitalGaugeOptions, target: string, baseSize: number): FontHeightInfo {
@@ -755,24 +760,26 @@ function drawDigitalTitle(context: DigitalGaugeCanvasRenderingContext2D, options
   context.font = Drawings.font(options, 'Title', fontSizeFactor);
   context.lineWidth = 0;
   drawText(context, options, 'Title', options.title.toUpperCase(), textX, textY);
+  context.restore();
 }
 
-function drawDigitalLabel(context: DigitalGaugeCanvasRenderingContext2D, options: CanvasDigitalGaugeOptions) {
-  if (!options.label || options.label === '') {
+function drawDigitalLabel(context: DigitalGaugeCanvasRenderingContext2D, options: CanvasDigitalGaugeOptions, text: string, nameTextY: string) {
+  if (!text || text === '') {
     return;
   }
 
-  const {labelY, baseX, width, fontSizeFactor} =
+  const {baseX, width, fontSizeFactor} =
     context.barDimensions;
 
   const textX = Math.round(baseX + width / 2);
-  const textY = labelY;
+  const textY = context.barDimensions[nameTextY];
 
   context.save();
   context.textAlign = 'center';
   context.font = Drawings.font(options, 'Label', fontSizeFactor);
   context.lineWidth = 0;
-  drawText(context, options, 'Label', options.label.toUpperCase(), textX, textY);
+  drawText(context, options, 'Label', text, textX, textY);
+  context.restore();
 }
 
 function drawDigitalMinMax(context: DigitalGaugeCanvasRenderingContext2D, options: CanvasDigitalGaugeOptions) {
@@ -790,6 +797,7 @@ function drawDigitalMinMax(context: DigitalGaugeCanvasRenderingContext2D, option
   context.lineWidth = 0;
   drawText(context, options, 'MinMax', options.minValue + '', minX, minY);
   drawText(context, options, 'MinMax', options.maxValue + '', maxX, maxY);
+  context.restore();
 }
 
 function drawDigitalValue(context: DigitalGaugeCanvasRenderingContext2D, options: CanvasDigitalGaugeOptions, value: any) {
@@ -812,6 +820,7 @@ function drawDigitalValue(context: DigitalGaugeCanvasRenderingContext2D, options
   context.font = Drawings.font(options, 'Value', fontSizeFactor);
   context.lineWidth = 0;
   drawText(context, options, 'Value', text, textX, textY);
+  context.restore();
 }
 
 function getProgressColor(progress: number, colorsRange: DigitalGaugeColorRange[]): string {
@@ -820,7 +829,7 @@ function getProgressColor(progress: number, colorsRange: DigitalGaugeColorRange[
     return colorsRange[0].rgbString;
   }
 
-  for (let j = 0; j < colorsRange.length; j++) {
+  for (let j = 1; j < colorsRange.length; j++) {
     if (progress <= colorsRange[j].pct) {
       const lower = colorsRange[j - 1];
       const upper = colorsRange[j];
@@ -836,6 +845,7 @@ function getProgressColor(progress: number, colorsRange: DigitalGaugeColorRange[
       return color.toRgbString();
     }
   }
+  return colorsRange[colorsRange.length - 1].rgbString;
 }
 
 function drawArcGlow(context: DigitalGaugeCanvasRenderingContext2D,
@@ -944,6 +954,7 @@ function drawTickBar(context: DigitalGaugeCanvasRenderingContext2D, tickValues: 
 function drawProgress(context: DigitalGaugeCanvasRenderingContext2D,
                       options: CanvasDigitalGaugeOptions, progress: number) {
   let neonColor;
+  context.save();
   if (options.neonGlowBrightness) {
     context.currentColor = neonColor = getProgressColor(progress, options.neonColorsRange);
   } else {
@@ -1019,4 +1030,5 @@ function drawProgress(context: DigitalGaugeCanvasRenderingContext2D,
       true, options.colorTicks, options.tickWidth);
   }
 
+  context.restore();
 }

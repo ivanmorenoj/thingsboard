@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 import { Component, forwardRef, Input, OnInit } from '@angular/core';
 import {
   ControlValueAccessor,
-  FormBuilder,
-  FormGroup,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
+  ValidationErrors,
+  Validator,
   ValidatorFn,
   Validators
 } from '@angular/forms';
@@ -27,7 +30,9 @@ import {
   DynamicValueSourceType,
   dynamicValueSourceTypeTranslationMap,
   EntityKeyValueType,
-  FilterPredicateValue
+  FilterPredicateValue,
+  getDynamicSourcesForAllowUser,
+  inheritModeForDynamicValueSourceType
 } from '@shared/models/query/query.models';
 
 @Component({
@@ -39,52 +44,64 @@ import {
       provide: NG_VALUE_ACCESSOR,
       useExisting: forwardRef(() => FilterPredicateValueComponent),
       multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => FilterPredicateValueComponent),
+      multi: true
     }
   ]
 })
-export class FilterPredicateValueComponent implements ControlValueAccessor, OnInit {
+export class FilterPredicateValueComponent implements ControlValueAccessor, Validator, OnInit {
 
-  private readonly inheritModeForSources: DynamicValueSourceType[] = [
-    DynamicValueSourceType.CURRENT_CUSTOMER,
-    DynamicValueSourceType.CURRENT_DEVICE];
+  private readonly inheritModeForSources: DynamicValueSourceType[] = inheritModeForDynamicValueSourceType;
 
   @Input() disabled: boolean;
 
   @Input()
   set allowUserDynamicSource(allow: boolean) {
-    this.dynamicValueSourceTypes = [DynamicValueSourceType.CURRENT_TENANT,
-      DynamicValueSourceType.CURRENT_CUSTOMER];
+    this.dynamicValueSourceTypes = getDynamicSourcesForAllowUser(allow);
     this.allow = allow;
-    if (allow) {
-      this.dynamicValueSourceTypes.push(DynamicValueSourceType.CURRENT_USER);
-    } else {
-      this.dynamicValueSourceTypes.push(DynamicValueSourceType.CURRENT_DEVICE);
+  }
+
+  private onlyUserDynamicSourceValue = false;
+
+  @Input()
+  set onlyUserDynamicSource(dynamicMode: boolean) {
+    this.onlyUserDynamicSourceValue = dynamicMode;
+    if (this.filterPredicateValueFormGroup) {
+      this.updateValidationDynamicMode();
+      setTimeout(() => {
+        this.updateModel();
+      }, 0);
     }
   }
 
-  @Input() onlyUserDynamicSource = false;
+  get onlyUserDynamicSource(): boolean {
+    return this.onlyUserDynamicSourceValue;
+  }
 
   @Input()
   valueType: EntityKeyValueType;
 
   valueTypeEnum = EntityKeyValueType;
 
-  dynamicValueSourceTypes: DynamicValueSourceType[] = [DynamicValueSourceType.CURRENT_TENANT,
-    DynamicValueSourceType.CURRENT_CUSTOMER, DynamicValueSourceType.CURRENT_USER];
+  allow = true;
+
+  dynamicValueSourceTypes: DynamicValueSourceType[] = getDynamicSourcesForAllowUser(this.allow);
 
   dynamicValueSourceTypeTranslations = dynamicValueSourceTypeTranslationMap;
 
-  filterPredicateValueFormGroup: FormGroup;
+  filterPredicateValueFormGroup: UntypedFormGroup;
 
   dynamicMode = false;
 
   inheritMode = false;
 
-  allow = true;
-
   private propagateChange = null;
+  private propagateChangePending = false;
 
-  constructor(private fb: FormBuilder) {
+  constructor(private fb: UntypedFormBuilder) {
   }
 
   ngOnInit(): void {
@@ -126,6 +143,7 @@ export class FilterPredicateValueComponent implements ControlValueAccessor, OnIn
         this.updateShowInheritMode(sourceType);
       }
     );
+    this.updateValidationDynamicMode();
     this.filterPredicateValueFormGroup.valueChanges.subscribe(() => {
       this.updateModel();
     });
@@ -133,12 +151,18 @@ export class FilterPredicateValueComponent implements ControlValueAccessor, OnIn
 
   registerOnChange(fn: any): void {
     this.propagateChange = fn;
+    if (this.propagateChangePending) {
+      this.propagateChangePending = false;
+      setTimeout(() => {
+        this.updateModel();
+      }, 0);
+    }
   }
 
   registerOnTouched(fn: any): void {
   }
 
-  setDisabledState?(isDisabled: boolean): void {
+  setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (this.disabled) {
       this.filterPredicateValueFormGroup.disable({emitEvent: false});
@@ -147,28 +171,35 @@ export class FilterPredicateValueComponent implements ControlValueAccessor, OnIn
     }
   }
 
+  validate(): ValidationErrors | null {
+    return this.filterPredicateValueFormGroup.valid ? null : {
+      filterPredicateValue: {valid: false}
+    };
+  }
+
   writeValue(predicateValue: FilterPredicateValue<string | number | boolean>): void {
+    this.propagateChangePending = false;
     this.filterPredicateValueFormGroup.get('defaultValue').patchValue(predicateValue.defaultValue, {emitEvent: false});
-    this.filterPredicateValueFormGroup.get('dynamicValue.sourceType').patchValue(predicateValue.dynamicValue ?
-      predicateValue.dynamicValue.sourceType : null, {emitEvent: false});
-    this.filterPredicateValueFormGroup.get('dynamicValue.sourceAttribute').patchValue(predicateValue.dynamicValue ?
-      predicateValue.dynamicValue.sourceAttribute : null, {emitEvent: false});
-    this.filterPredicateValueFormGroup.get('dynamicValue.inherit').patchValue(predicateValue.dynamicValue ?
-      predicateValue.dynamicValue.inherit : false, {emitEvent: false});
+    this.filterPredicateValueFormGroup.get('dynamicValue').patchValue({
+      sourceType: predicateValue.dynamicValue ? predicateValue.dynamicValue.sourceType : null,
+      sourceAttribute: predicateValue.dynamicValue ? predicateValue.dynamicValue.sourceAttribute : null,
+      inherit: predicateValue.dynamicValue ? predicateValue.dynamicValue.inherit : false
+    }, {emitEvent: this.onlyUserDynamicSource});
     this.updateShowInheritMode(predicateValue?.dynamicValue?.sourceType);
   }
 
   private updateModel() {
-    let predicateValue: FilterPredicateValue<string | number | boolean> = null;
-    if (this.filterPredicateValueFormGroup.valid) {
-      predicateValue = this.filterPredicateValueFormGroup.getRawValue();
-      if (predicateValue.dynamicValue) {
-        if (!predicateValue.dynamicValue.sourceType || !predicateValue.dynamicValue.sourceAttribute) {
-          predicateValue.dynamicValue = null;
-        }
+    const predicateValue: FilterPredicateValue<string | number | boolean> = this.filterPredicateValueFormGroup.getRawValue();
+    if (predicateValue.dynamicValue) {
+      if (!predicateValue.dynamicValue.sourceType || !predicateValue.dynamicValue.sourceAttribute) {
+        predicateValue.dynamicValue = null;
       }
     }
-    this.propagateChange(predicateValue);
+    if (this.propagateChange) {
+      this.propagateChange(predicateValue);
+    } else {
+      this.propagateChangePending = true;
+    }
   }
 
   private updateShowInheritMode(sourceType: DynamicValueSourceType) {
@@ -178,5 +209,17 @@ export class FilterPredicateValueComponent implements ControlValueAccessor, OnIn
       this.filterPredicateValueFormGroup.get('dynamicValue.inherit').patchValue(false, {emitEvent: false});
       this.inheritMode = false;
     }
+  }
+
+  private updateValidationDynamicMode() {
+    if (this.onlyUserDynamicSource) {
+      this.filterPredicateValueFormGroup.get('dynamicValue.sourceType').setValidators(Validators.required);
+      this.filterPredicateValueFormGroup.get('dynamicValue.sourceAttribute').setValidators(Validators.required);
+    } else {
+      this.filterPredicateValueFormGroup.get('dynamicValue.sourceType').clearValidators();
+      this.filterPredicateValueFormGroup.get('dynamicValue.sourceAttribute').clearValidators();
+    }
+    this.filterPredicateValueFormGroup.get('dynamicValue.sourceType').updateValueAndValidity({emitEvent: false});
+    this.filterPredicateValueFormGroup.get('dynamicValue.sourceAttribute').updateValueAndValidity({emitEvent: false});
   }
 }

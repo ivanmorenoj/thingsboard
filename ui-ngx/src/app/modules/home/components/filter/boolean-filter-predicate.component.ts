@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,11 +15,21 @@
 ///
 
 import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import {
+  ControlValueAccessor,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  ValidationErrors,
+  Validator,
+  Validators
+} from '@angular/forms';
 import {
   BooleanFilterPredicate,
   BooleanOperation,
-  booleanOperationTranslationMap, EntityKeyValueType,
+  booleanOperationTranslationMap,
+  EntityKeyValueType,
   FilterPredicateType
 } from '@shared/models/query/query.models';
 
@@ -32,10 +42,15 @@ import {
       provide: NG_VALUE_ACCESSOR,
       useExisting: forwardRef(() => BooleanFilterPredicateComponent),
       multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => BooleanFilterPredicateComponent),
+      multi: true
     }
   ]
 })
-export class BooleanFilterPredicateComponent implements ControlValueAccessor, OnInit {
+export class BooleanFilterPredicateComponent implements ControlValueAccessor, Validator, OnInit {
 
   @Input() disabled: boolean;
 
@@ -45,7 +60,7 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, On
 
   valueTypeEnum = EntityKeyValueType;
 
-  booleanFilterPredicateFormGroup: FormGroup;
+  booleanFilterPredicateFormGroup: UntypedFormGroup;
 
   booleanOperations = Object.keys(BooleanOperation);
   booleanOperationEnum = BooleanOperation;
@@ -53,7 +68,7 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, On
 
   private propagateChange = null;
 
-  constructor(private fb: FormBuilder) {
+  constructor(private fb: UntypedFormBuilder) {
   }
 
   ngOnInit(): void {
@@ -73,13 +88,19 @@ export class BooleanFilterPredicateComponent implements ControlValueAccessor, On
   registerOnTouched(fn: any): void {
   }
 
-  setDisabledState?(isDisabled: boolean): void {
+  setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (this.disabled) {
       this.booleanFilterPredicateFormGroup.disable({emitEvent: false});
     } else {
       this.booleanFilterPredicateFormGroup.enable({emitEvent: false});
     }
+  }
+
+  validate(): ValidationErrors | null {
+    return this.booleanFilterPredicateFormGroup ? null : {
+      booleanFilterPredicate: {valid: false}
+    };
   }
 
   writeValue(predicate: BooleanFilterPredicate): void {

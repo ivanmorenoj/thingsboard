@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import {
   ViewChild,
   ViewContainerRef
 } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import { ControlValueAccessor, UntypedFormBuilder, UntypedFormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
 import {
   IRuleNodeConfigurationComponent,
   RuleNodeConfiguration,
@@ -37,6 +37,7 @@ import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { TranslateService } from '@ngx-translate/core';
 import { JsonObjectEditComponent } from '@shared/components/json-object-edit.component';
 import { deepClone } from '@core/utils';
+import { RuleChainType } from '@shared/models/rule-chain.models';
 
 @Component({
   selector: 'tb-rule-node-config',
@@ -69,6 +70,12 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
   @Input()
   ruleNodeId: string;
 
+  @Input()
+  ruleChainId: string;
+
+  @Input()
+  ruleChainType: RuleChainType;
+
   nodeDefinitionValue: RuleNodeDefinition;
 
   @Input()
@@ -87,7 +94,7 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
 
   definedDirectiveError: string;
 
-  ruleNodeConfigFormGroup: FormGroup;
+  ruleNodeConfigFormGroup: UntypedFormGroup;
 
   changeSubscription: Subscription;
 
@@ -100,7 +107,7 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
 
   constructor(private translate: TranslateService,
               private ruleChainService: RuleChainService,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     this.ruleNodeConfigFormGroup = this.fb.group({
       configuration: [null, Validators.required]
     });
@@ -186,6 +193,8 @@ export class RuleNodeConfigComponent implements ControlValueAccessor, OnInit, On
       this.definedConfigComponentRef = this.definedConfigContainer.createComponent(factory);
       this.definedConfigComponent = this.definedConfigComponentRef.instance;
       this.definedConfigComponent.ruleNodeId = this.ruleNodeId;
+      this.definedConfigComponent.ruleChainId = this.ruleChainId;
+      this.definedConfigComponent.ruleChainType = this.ruleChainType;
       this.definedConfigComponent.configuration = this.configuration;
       this.changeSubscription = this.definedConfigComponent.configurationChanged.subscribe((configuration) => {
         this.updateModel(configuration);

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -21,8 +21,9 @@ import { map, mergeMap, tap } from 'rxjs/operators';
 
 let aceDependenciesLoaded = false;
 let aceModule: any;
+let aceDiffModule: any;
 
-export function loadAceDependencies(): Observable<any> {
+function loadAceDependencies(): Observable<any> {
   if (aceDependenciesLoaded) {
     return of(null);
   } else {
@@ -36,13 +37,19 @@ export function loadAceDependencies(): Observable<any> {
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-text')));
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-markdown')));
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-html')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/mode-c_cpp')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/mode-protobuf')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/java')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/css')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/json')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/javascript')));
+    aceObservables.push(from(import('./tbel/mode-tbel')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/text')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/markdown')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/html')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/snippets/c_cpp')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/snippets/protobuf')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/theme-textmate')));
     aceObservables.push(from(import('ace-builds/src-noconflict/theme-github')));
     return forkJoin(aceObservables).pipe(
       tap(() => {
@@ -64,6 +71,21 @@ export function getAce(): Observable<any> {
       }),
       tap((module) => {
         aceModule = module;
+      })
+    );
+  }
+}
+
+export function getAceDiff(): Observable<any> {
+  if (aceDiffModule) {
+    return of(aceDiffModule);
+  } else {
+    return getAce().pipe(
+      mergeMap((ace) => {
+        return from(import('ace-diff'));
+      }),
+      tap((module) => {
+        aceDiffModule = module;
       })
     );
   }

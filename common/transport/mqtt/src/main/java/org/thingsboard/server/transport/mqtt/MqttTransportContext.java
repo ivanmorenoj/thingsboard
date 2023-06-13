@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,10 @@ import org.thingsboard.server.common.transport.TransportContext;
 import org.thingsboard.server.transport.mqtt.adaptors.JsonMqttAdaptor;
 import org.thingsboard.server.transport.mqtt.adaptors.ProtoMqttAdaptor;
 
+import javax.annotation.PostConstruct;
+import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Created by ashvayka on 04.10.18.
  */
@@ -52,11 +56,51 @@ public class MqttTransportContext extends TransportContext {
     private Integer maxPayloadSize;
 
     @Getter
-    @Value("${transport.mqtt.netty.skip_validity_check_for_client_cert:false}")
+    @Value("${transport.mqtt.ssl.skip_validity_check_for_client_cert:false}")
     private boolean skipValidityCheckForClientCert;
 
     @Getter
     @Setter
     private SslHandler sslHandler;
+
+    @Getter
+    @Value("${transport.mqtt.msg_queue_size_per_device_limit:100}")
+    private int messageQueueSizePerDeviceLimit;
+
+    @Getter
+    @Value("${transport.mqtt.timeout:10000}")
+    private long timeout;
+
+    @Getter
+    @Value("${transport.mqtt.proxy_enabled:false}")
+    private boolean proxyEnabled;
+
+    private final AtomicInteger connectionsCounter = new AtomicInteger();
+
+    @PostConstruct
+    public void init() {
+        super.init();
+        transportService.createGaugeStats("openConnections", connectionsCounter);
+    }
+
+    public void channelRegistered() {
+        connectionsCounter.incrementAndGet();
+    }
+
+    public void channelUnregistered() {
+        connectionsCounter.decrementAndGet();
+    }
+
+    public boolean checkAddress(InetSocketAddress address) {
+        return rateLimitService.checkAddress(address);
+    }
+
+    public void onAuthSuccess(InetSocketAddress address) {
+        rateLimitService.onAuthSuccess(address);
+    }
+
+    public void onAuthFailure(InetSocketAddress address) {
+        rateLimitService.onAuthFailure(address);
+    }
 
 }

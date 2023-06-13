@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -16,20 +16,25 @@
 
 import L, { LatLngBounds, LatLngLiteral, LatLngTuple } from 'leaflet';
 import LeafletMap from '../leaflet-map';
-import { MapImage, PosFuncton, UnitedMapSettings } from '../map-models';
+import {
+  CircleData,
+  defaultImageMapProviderSettings,
+  MapImage,
+  PosFunction,
+  WidgetUnitedMapSettings
+} from '../map-models';
 import { Observable, ReplaySubject } from 'rxjs';
-import { filter, map, mergeMap } from 'rxjs/operators';
+import { catchError, map, mergeMap } from 'rxjs/operators';
 import {
   aspectCache,
-  calculateNewPointCoordinate,
-  checkLngLat,
-  parseFunction
+  calculateNewPointCoordinate
 } from '@home/components/widget/lib/maps/common-maps-utils';
 import { WidgetContext } from '@home/models/widget-component.models';
-import { DataSet, DatasourceType, widgetType } from '@shared/models/widget.models';
+import { DataSet, DatasourceType, FormattedData, widgetType } from '@shared/models/widget.models';
 import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
 import { WidgetSubscriptionOptions } from '@core/api/widget-api.models';
-import { isDefinedAndNotNull, isEmptyStr } from '@core/utils';
+import { isDefinedAndNotNull, isEmptyStr, isNotEmptyStr, parseFunction } from '@core/utils';
+import { EntityDataPageLink } from '@shared/models/query/query.models';
 
 const maxZoom = 4; // ?
 
@@ -40,11 +45,12 @@ export class ImageMap extends LeafletMap {
     width = 0;
     height = 0;
     imageUrl: string;
-    posFunction: PosFuncton;
+    posFunction: PosFunction;
 
-    constructor(ctx: WidgetContext, $container: HTMLElement, options: UnitedMapSettings) {
+    constructor(ctx: WidgetContext, $container: HTMLElement, options: WidgetUnitedMapSettings) {
         super(ctx, $container, options);
-        this.posFunction = parseFunction(options.posFunction, ['origXPos', 'origYPos']) as PosFuncton;
+        this.posFunction = parseFunction(options.posFunction,
+          ['origXPos', 'origYPos', 'data', 'dsData', 'dsIndex', 'aspect']) as PosFunction;
         this.mapImage(options).subscribe((mapImage) => {
           this.imageUrl = mapImage.imageUrl;
           this.aspect = mapImage.aspect;
@@ -52,21 +58,20 @@ export class ImageMap extends LeafletMap {
             this.onResize(true);
           } else {
             this.onResize();
-            super.initSettings(options);
             super.setMap(this.map);
           }
         });
     }
 
-    private mapImage(options: UnitedMapSettings): Observable<MapImage> {
+    private mapImage(options: WidgetUnitedMapSettings): Observable<MapImage> {
       const imageEntityAlias = options.imageEntityAlias;
       const imageUrlAttribute = options.imageUrlAttribute;
       if (!imageEntityAlias || !imageUrlAttribute) {
-        return this.imageFromUrl(options.mapUrl);
+        return this.imageFromUrl(options.mapImageUrl);
       }
       const entityAliasId = this.ctx.aliasController.getEntityAliasId(imageEntityAlias);
       if (!entityAliasId) {
-        return this.imageFromUrl(options.mapUrl);
+        return this.imageFromUrl(options.mapImageUrl);
       }
       const datasources = [
         {
@@ -89,16 +94,30 @@ export class ImageMap extends LeafletMap {
       let isUpdate = false;
       const imageUrlSubscriptionOptions: WidgetSubscriptionOptions = {
         datasources,
+        hasDataPageLink: true,
+        singleEntity: true,
         useDashboardTimewindow: false,
         type: widgetType.latest,
         callbacks: {
           onDataUpdated: (subscription) => {
-            result.next([subscription.data[0]?.data, isUpdate]);
+            if (isNotEmptyStr(subscription.data[0]?.data[0]?.[1])) {
+              result.next([subscription.data[0].data, isUpdate]);
+            } else {
+              result.next([[[0, options.mapImageUrl]], isUpdate]);
+            }
             isUpdate = true;
           }
         }
       };
-      this.ctx.subscriptionApi.createSubscription(imageUrlSubscriptionOptions, true).subscribe(() => { });
+      this.ctx.subscriptionApi.createSubscription(imageUrlSubscriptionOptions, true).subscribe((subscription) => {
+        const pageLink: EntityDataPageLink = {
+          page: 0,
+          pageSize: 1,
+          textSearch: null,
+          dynamic: true
+        };
+        subscription.subscribeAllForPaginatedData(pageLink, null);
+      });
       return this.imageFromAlias(result);
     }
 
@@ -112,12 +131,15 @@ export class ImageMap extends LeafletMap {
             };
             return mapImage;
           }
-        ));
+        ),
+        catchError((e) => {
+          return this.imageFromUrl(defaultImageMapProviderSettings.mapImageUrl);
+        })
+      );
     }
 
     private imageFromAlias(alias: Observable<[DataSet, boolean]>): Observable<MapImage> {
       return alias.pipe(
-        filter(result => result[0].length > 0),
         mergeMap(res => {
           const mapImage: MapImage = {
             imageUrl: res[0][0][1],
@@ -129,7 +151,11 @@ export class ImageMap extends LeafletMap {
                 mapImage.aspect = aspect;
                 return mapImage;
               }
-            ));
+            ),
+            catchError((e) => {
+              return this.imageFromUrl(defaultImageMapProviderSettings.mapImageUrl);
+            })
+          );
         })
       );
     }
@@ -155,32 +181,32 @@ export class ImageMap extends LeafletMap {
         const southWest = this.pointToLatLng(-padding, h + padding);
         const northEast = this.pointToLatLng(w + padding, -padding);
         const maxBounds = new L.LatLngBounds(southWest, northEast);
+        (this.map as any)._enforcingBounds = true;
         this.map.setMaxBounds(maxBounds);
         if (lastCenterPos) {
             lastCenterPos.x *= w;
             lastCenterPos.y *= h;
             const center = this.pointToLatLng(lastCenterPos.x, lastCenterPos.y);
-            setTimeout(() => {
-                this.map.panTo(center, { animate: false });
-            }, 0);
+            this.map.panTo(center, { animate: false });
         }
+        (this.map as any)._enforcingBounds = false;
     }
 
     onResize(updateImage?: boolean) {
       let width = this.$container.clientWidth;
       if (width > 0 && this.aspect) {
-        let height = width / this.aspect;
+        let height = Math.round(width / this.aspect);
         const imageMapHeight = this.$container.clientHeight;
         if (imageMapHeight > 0 && height > imageMapHeight) {
           height = imageMapHeight;
-          width = height * this.aspect;
+          width = Math.round(height * this.aspect);
         }
         width *= maxZoom;
         const prevWidth = this.width;
         const prevHeight = this.height;
         if (this.width !== width || updateImage) {
           this.width = width;
-          this.height = width / this.aspect;
+          this.height = Math.round(width / this.aspect);
           if (!this.map) {
             this.initMap(updateImage);
           } else {
@@ -188,20 +214,15 @@ export class ImageMap extends LeafletMap {
             lastCenterPos.x /= prevWidth;
             lastCenterPos.y /= prevHeight;
             this.updateBounds(updateImage, lastCenterPos);
-            this.map.invalidateSize(true);
+            (this.map as any)._enforcingBounds = true;
+            this.map.invalidateSize(false);
+            (this.map as any)._enforcingBounds = false;
             this.updateMarkers(this.markersData);
-            if (this.options.draggableMarker && this.addMarkers.length) {
-              this.addMarkers.forEach((marker) => {
-                const prevPoint = this.convertToCustomFormat(marker.getLatLng(), null, prevWidth, prevHeight);
-                marker.setLatLng(this.convertPosition(prevPoint));
-              });
+            if (this.options.showPolygon) {
+              this.updatePolygons(this.polygonsData);
             }
-            this.updatePolygons(this.polygonsData);
-            if (this.options.showPolygon && this.options.editablePolygon && this.addPolygons.length) {
-              this.addPolygons.forEach((polygon) => {
-                const prevPolygonPoint = this.convertToPolygonFormat(polygon.getLatLngs(), prevWidth, prevHeight);
-                polygon.setLatLngs(this.convertPositionPolygon(prevPolygonPoint));
-              });
+            if (this.options.showCircle) {
+              this.updateCircle(this.circleData);
             }
           }
         }
@@ -218,25 +239,42 @@ export class ImageMap extends LeafletMap {
           maxZoom,
           scrollWheelZoom: !this.options.disableScrollZooming,
           center,
+          doubleClickZoom: !this.options.disableDoubleClickZooming,
+          zoomControl: !this.options.disableZoomControl,
           zoom: 1,
           crs: L.CRS.Simple,
-          attributionControl: false,
-          editable: !!this.options.editablePolygon
+          attributionControl: false
         });
         this.updateBounds(updateImage);
       }
     }
 
-    convertPosition(expression): L.LatLng {
-      const xPos = expression[this.options.xPosKeyName];
-      const yPos = expression[this.options.yPosKeyName];
+    extractPosition(data: FormattedData): {x: number, y: number} {
+      if (!data) {
+        return null;
+      }
+      const xPos = data[this.options.xPosKeyName];
+      const yPos = data[this.options.yPosKeyName];
       if (!isDefinedAndNotNull(xPos) || isEmptyStr(xPos) || isNaN(xPos) || !isDefinedAndNotNull(yPos) || isEmptyStr(yPos) || isNaN(yPos)) {
         return null;
       }
-      Object.assign(expression, this.posFunction(xPos, yPos));
+      return {x: xPos, y: yPos};
+    }
+
+    positionToLatLng(position: {x: number, y: number}): L.LatLng {
       return this.pointToLatLng(
-        expression.x * this.width,
-        expression.y * this.height);
+        position.x * this.width,
+        position.y * this.height);
+    }
+
+    convertPosition(data, dsData: FormattedData[]): L.LatLng {
+      const position = this.extractPosition(data);
+      if (position) {
+        const converted = this.posFunction(position.x, position.y, data, dsData, data.dsIndex, this.aspect) || {x: 0, y: 0};
+        return this.positionToLatLng(converted);
+      } else {
+        return null;
+      }
     }
 
     convertPositionPolygon(expression: (LatLngTuple | LatLngTuple[] | LatLngTuple[][])[]){
@@ -258,11 +296,17 @@ export class ImageMap extends LeafletMap {
         return L.CRS.Simple.pointToLatLng({ x, y } as L.PointExpression, maxZoom - 1);
     }
 
-    latLngToPoint(latLng: LatLngLiteral) {
+    latLngToPoint(latLng: LatLngLiteral): L.Point {
         return L.CRS.Simple.latLngToPoint(latLng, maxZoom - 1);
     }
 
-    convertToCustomFormat(position: L.LatLng, offset = 0, width = this.width, height = this.height): object {
+    convertToCustomFormat(position: L.LatLng, offset = 0, width = this.width, height = this.height): {[key: string]: any} {
+      if (!position) {
+        return {
+          [this.options.xPosKeyName]: null,
+          [this.options.yPosKeyName]: null
+        };
+      }
       const point = this.latLngToPoint(position);
       const customX = calculateNewPointCoordinate(point.x, width);
       const customY = calculateNewPointCoordinate(point.y, height);
@@ -278,13 +322,9 @@ export class ImageMap extends LeafletMap {
         point.y = height;
       }
 
-      const customLatLng = checkLngLat(this.pointToLatLng(point.x, point.y), this.southWest, this.northEast, offset);
-
       return {
         [this.options.xPosKeyName]: customX,
-        [this.options.yPosKeyName]: customY,
-        [this.options.latKeyName]: customLatLng.lat,
-        [this.options.lngKeyName]: customLatLng.lng
+        [this.options.yPosKeyName]: customY
       };
     }
 
@@ -303,9 +343,37 @@ export class ImageMap extends LeafletMap {
       }
     }
 
-    convertPolygonToCustomFormat(expression: any[][]): object {
+    convertPolygonToCustomFormat(expression: any[][]): {[key: string]: any} {
+      const coordinate = expression ? this.convertToPolygonFormat(expression) : null;
       return {
-        [this.options.polygonKeyName] : this.convertToPolygonFormat(expression)
+        [this.options.polygonKeyName]: coordinate
       };
+    }
+
+    convertCircleToCustomFormat(expression: L.LatLng, radius: number, width = this.width,
+                                height = this.height): {[key: string]: CircleData} {
+      let circleDara: CircleData = null;
+      if (expression) {
+        const point = this.latLngToPoint(expression);
+        const customX = calculateNewPointCoordinate(point.x, width);
+        const customY = calculateNewPointCoordinate(point.y, height);
+        const customRadius = calculateNewPointCoordinate(radius, width);
+        circleDara = {
+          latitude: customX,
+          longitude: customY,
+          radius: customRadius
+        };
+      }
+      return {
+        [this.options.circleKeyName]: circleDara
+      };
+    }
+
+    convertToCircleFormat(circle: CircleData, width = this.width, height = this.height): CircleData {
+      const centerPoint = this.pointToLatLng(circle.latitude * width, circle.longitude * height);
+      circle.latitude = centerPoint.lat;
+      circle.longitude = centerPoint.lng;
+      circle.radius = circle.radius * width;
+      return circle;
     }
 }

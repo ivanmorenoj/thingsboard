@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -74,9 +74,9 @@ export class DateRangeNavigatorWidgetComponent extends PageComponent implements 
   private firstUpdate = true;
   private dashboardTimewindowChangedSubscription: Subscription;
 
-  originalOrder = (a: KeyValue<number,DateIntervalEntry>, b: KeyValue<number,DateIntervalEntry>): number => {
+  originalOrder = (a: KeyValue<string, DateIntervalEntry>, b: KeyValue<string, DateIntervalEntry>): number => {
     return 0;
-  };
+  }
 
   constructor(private utils: UtilsService,
               private overlay: Overlay,

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,27 +16,27 @@
 package org.thingsboard.server.dao.widget;
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.HasId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.WidgetsBundleId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.widget.WidgetsBundle;
-import org.thingsboard.server.dao.exception.DataValidationException;
+import org.thingsboard.server.dao.entity.AbstractCachedEntityService;
 import org.thingsboard.server.dao.exception.IncorrectParameterException;
-import org.thingsboard.server.dao.model.ModelConstants;
 import org.thingsboard.server.dao.service.DataValidator;
 import org.thingsboard.server.dao.service.PaginatedRemover;
 import org.thingsboard.server.dao.service.Validator;
-import org.thingsboard.server.dao.tenant.TenantDao;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-@Service
+@Service("WidgetsBundleDaoService")
 @Slf4j
 public class WidgetsBundleServiceImpl implements WidgetsBundleService {
 
@@ -48,10 +48,10 @@ public class WidgetsBundleServiceImpl implements WidgetsBundleService {
     private WidgetsBundleDao widgetsBundleDao;
 
     @Autowired
-    private TenantDao tenantDao;
+    private WidgetTypeService widgetTypeService;
 
     @Autowired
-    private WidgetTypeService widgetTypeService;
+    private DataValidator<WidgetsBundle> widgetsBundleValidator;
 
     @Override
     public WidgetsBundle findWidgetsBundleById(TenantId tenantId, WidgetsBundleId widgetsBundleId) {
@@ -64,7 +64,12 @@ public class WidgetsBundleServiceImpl implements WidgetsBundleService {
     public WidgetsBundle saveWidgetsBundle(WidgetsBundle widgetsBundle) {
         log.trace("Executing saveWidgetsBundle [{}]", widgetsBundle);
         widgetsBundleValidator.validate(widgetsBundle, WidgetsBundle::getTenantId);
-        return widgetsBundleDao.save(widgetsBundle.getTenantId(), widgetsBundle);
+        try {
+            return widgetsBundleDao.save(widgetsBundle.getTenantId(), widgetsBundle);
+        } catch (Exception e) {
+            AbstractCachedEntityService.checkConstraintViolation(e, "widgets_bundle_external_id_unq_key", "Widget Bundle with such external id already exists!");
+            throw e;
+        }
     }
 
     @Override
@@ -150,55 +155,15 @@ public class WidgetsBundleServiceImpl implements WidgetsBundleService {
         tenantWidgetsBundleRemover.removeEntities(tenantId, tenantId);
     }
 
-    private DataValidator<WidgetsBundle> widgetsBundleValidator =
-            new DataValidator<WidgetsBundle>() {
+    @Override
+    public Optional<HasId<?>> findEntity(TenantId tenantId, EntityId entityId) {
+        return Optional.ofNullable(findWidgetsBundleById(tenantId, new WidgetsBundleId(entityId.getId())));
+    }
 
-                @Override
-                protected void validateDataImpl(TenantId tenantId, WidgetsBundle widgetsBundle) {
-                    if (StringUtils.isEmpty(widgetsBundle.getTitle())) {
-                        throw new DataValidationException("Widgets bundle title should be specified!");
-                    }
-                    if (widgetsBundle.getTenantId() == null) {
-                        widgetsBundle.setTenantId(new TenantId(ModelConstants.NULL_UUID));
-                    }
-                    if (!widgetsBundle.getTenantId().getId().equals(ModelConstants.NULL_UUID)) {
-                        Tenant tenant = tenantDao.findById(tenantId, widgetsBundle.getTenantId().getId());
-                        if (tenant == null) {
-                            throw new DataValidationException("Widgets bundle is referencing to non-existent tenant!");
-                        }
-                    }
-                }
-
-                @Override
-                protected void validateCreate(TenantId tenantId, WidgetsBundle widgetsBundle) {
-                    String alias = widgetsBundle.getAlias();
-                    if (alias == null || alias.trim().isEmpty()) {
-                        alias = widgetsBundle.getTitle().toLowerCase().replaceAll("\\W+", "_");
-                    }
-                    String originalAlias = alias;
-                    int c = 1;
-                    WidgetsBundle withSameAlias;
-                    do {
-                        withSameAlias = widgetsBundleDao.findWidgetsBundleByTenantIdAndAlias(widgetsBundle.getTenantId().getId(), alias);
-                        if (withSameAlias != null) {
-                            alias = originalAlias + (++c);
-                        }
-                    } while(withSameAlias != null);
-                    widgetsBundle.setAlias(alias);
-                }
-
-                @Override
-                protected void validateUpdate(TenantId tenantId, WidgetsBundle widgetsBundle) {
-                    WidgetsBundle storedWidgetsBundle = widgetsBundleDao.findById(tenantId, widgetsBundle.getId().getId());
-                    if (!storedWidgetsBundle.getTenantId().getId().equals(widgetsBundle.getTenantId().getId())) {
-                        throw new DataValidationException("Can't move existing widgets bundle to different tenant!");
-                    }
-                    if (!storedWidgetsBundle.getAlias().equals(widgetsBundle.getAlias())) {
-                        throw new DataValidationException("Update of widgets bundle alias is prohibited!");
-                    }
-                }
-
-            };
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.WIDGETS_BUNDLE;
+    }
 
     private PaginatedRemover<TenantId, WidgetsBundle> tenantWidgetsBundleRemover =
             new PaginatedRemover<TenantId, WidgetsBundle>() {

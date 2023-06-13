@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,13 @@
 package org.thingsboard.server.dao.relation;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.page.PageData;
-import org.thingsboard.server.common.data.page.TimePageLink;
 import org.thingsboard.server.common.data.relation.EntityRelation;
 import org.thingsboard.server.common.data.relation.RelationTypeGroup;
+import org.thingsboard.server.common.data.rule.RuleChainType;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -31,19 +30,27 @@ import java.util.List;
  */
 public interface RelationDao {
 
-    ListenableFuture<List<EntityRelation>> findAllByFrom(TenantId tenantId, EntityId from, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByFrom(TenantId tenantId, EntityId from, RelationTypeGroup typeGroup);
 
-    ListenableFuture<List<EntityRelation>> findAllByFromAndType(TenantId tenantId, EntityId from, String relationType, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByFrom(TenantId tenantId, EntityId from);
 
-    ListenableFuture<List<EntityRelation>> findAllByTo(TenantId tenantId, EntityId to, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByFromAndType(TenantId tenantId, EntityId from, String relationType, RelationTypeGroup typeGroup);
 
-    ListenableFuture<List<EntityRelation>> findAllByToAndType(TenantId tenantId, EntityId to, String relationType, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByTo(TenantId tenantId, EntityId to, RelationTypeGroup typeGroup);
 
-    ListenableFuture<Boolean> checkRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByTo(TenantId tenantId, EntityId to);
 
-    ListenableFuture<EntityRelation> getRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+    List<EntityRelation> findAllByToAndType(TenantId tenantId, EntityId to, String relationType, RelationTypeGroup typeGroup);
+
+    ListenableFuture<Boolean> checkRelationAsync(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+
+    boolean checkRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+
+    EntityRelation getRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
 
     boolean saveRelation(TenantId tenantId, EntityRelation relation);
+
+    void saveRelations(TenantId tenantId, Collection<EntityRelation> relations);
 
     ListenableFuture<Boolean> saveRelationAsync(TenantId tenantId, EntityRelation relation);
 
@@ -55,8 +62,11 @@ public interface RelationDao {
 
     ListenableFuture<Boolean> deleteRelationAsync(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
 
-    boolean deleteOutboundRelations(TenantId tenantId, EntityId entity);
+    void deleteOutboundRelations(TenantId tenantId, EntityId entity);
+
+    void deleteInboundRelations(TenantId tenantId, EntityId entity);
 
     ListenableFuture<Boolean> deleteOutboundRelationsAsync(TenantId tenantId, EntityId entity);
 
+    List<EntityRelation> findRuleNodeToRuleChainRelations(RuleChainType ruleChainType, int limit);
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -17,22 +17,6 @@
 import { TenantId } from './id/tenant-id';
 import { BaseData, HasId } from '@shared/models/base-data';
 
-///
-/// Copyright © 2016-2019 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
 export enum EntityType {
   TENANT = 'TENANT',
   TENANT_PROFILE = 'TENANT_PROFILE',
@@ -42,13 +26,24 @@ export enum EntityType {
   ASSET = 'ASSET',
   DEVICE = 'DEVICE',
   DEVICE_PROFILE = 'DEVICE_PROFILE',
+  ASSET_PROFILE = 'ASSET_PROFILE',
   ALARM = 'ALARM',
   RULE_CHAIN = 'RULE_CHAIN',
   RULE_NODE = 'RULE_NODE',
+  EDGE = 'EDGE',
   ENTITY_VIEW = 'ENTITY_VIEW',
   WIDGETS_BUNDLE = 'WIDGETS_BUNDLE',
   WIDGET_TYPE = 'WIDGET_TYPE',
-  API_USAGE_STATE = 'API_USAGE_STATE'
+  API_USAGE_STATE = 'API_USAGE_STATE',
+  TB_RESOURCE = 'TB_RESOURCE',
+  OTA_PACKAGE = 'OTA_PACKAGE',
+  RPC = 'RPC',
+  QUEUE = 'QUEUE',
+  NOTIFICATION = 'NOTIFICATION',
+  NOTIFICATION_REQUEST = 'NOTIFICATION_REQUEST',
+  NOTIFICATION_RULE = 'NOTIFICATION_RULE',
+  NOTIFICATION_TARGET = 'NOTIFICATION_TARGET',
+  NOTIFICATION_TEMPLATE = 'NOTIFICATION_TEMPLATE'
 }
 
 export enum AliasEntityType {
@@ -162,6 +157,20 @@ export const entityTypeTranslations = new Map<EntityType | AliasEntityType, Enti
       }
     ],
     [
+      EntityType.ASSET_PROFILE,
+      {
+        type: 'entity.type-asset-profile',
+        typePlural: 'entity.type-asset-profiles',
+        list: 'entity.list-of-asset-profiles',
+        nameStartsWith: 'entity.asset-profile-name-starts-with',
+        details: 'asset-profile.asset-profile-details',
+        add: 'asset-profile.add',
+        noEntities: 'asset-profile.no-asset-profiles-text',
+        search: 'asset-profile.search',
+        selectedEntities: 'asset-profile.selected-asset-profiles'
+      }
+    ],
+    [
       EntityType.ASSET,
       {
         type: 'entity.type-asset',
@@ -173,6 +182,20 @@ export const entityTypeTranslations = new Map<EntityType | AliasEntityType, Enti
         noEntities: 'asset.no-assets-text',
         search: 'asset.search',
         selectedEntities: 'asset.selected-assets'
+      }
+    ],
+    [
+      EntityType.EDGE,
+      {
+        type: 'entity.type-edge',
+        typePlural: 'entity.type-edges',
+        list: 'entity.list-of-edges',
+        nameStartsWith: 'entity.edge-name-starts-with',
+        details: 'edge.edge-details',
+        add: 'edge.add',
+        noEntities: 'edge.no-edges-text',
+        search: 'edge.search',
+        selectedEntities: 'edge.selected-edges'
       }
     ],
     [
@@ -233,7 +256,7 @@ export const entityTypeTranslations = new Map<EntityType | AliasEntityType, Enti
         typePlural: 'entity.type-alarms',
         list: 'entity.list-of-alarms',
         nameStartsWith: 'entity.alarm-name-starts-with',
-        details: 'dashboard.dashboard-details',
+        details: 'alarm.alarm-details',
         noEntities: 'alarm.no-alarms-prompt',
         search: 'alarm.search',
         selectedEntities: 'alarm.selected-alarms'
@@ -248,6 +271,9 @@ export const entityTypeTranslations = new Map<EntityType | AliasEntityType, Enti
     [
       EntityType.WIDGETS_BUNDLE,
       {
+        type: 'entity.type-widgets-bundle',
+        typePlural: 'entity.type-widgets-bundles',
+        list: 'entity.list-of-widgets-bundles',
         details: 'widgets-bundle.widgets-bundle-details',
         add: 'widgets-bundle.add',
         noEntities: 'widgets-bundle.no-widgets-bundles-text',
@@ -281,6 +307,88 @@ export const entityTypeTranslations = new Map<EntityType | AliasEntityType, Enti
       {
         type: 'entity.type-current-user-owner',
         list: 'entity.type-current-user-owner'
+      }
+    ],
+    [
+      EntityType.TB_RESOURCE,
+      {
+        type: 'entity.type-tb-resource',
+        details: 'resource.resource-library-details',
+        add: 'resource.add',
+        noEntities: 'resource.no-resource-text',
+        search: 'resource.search',
+        selectedEntities: 'resource.selected-resources'
+      }
+    ],
+    [
+      EntityType.OTA_PACKAGE,
+      {
+        type: 'entity.type-ota-package',
+        details: 'ota-update.ota-update-details',
+        add: 'ota-update.add',
+        noEntities: 'ota-update.no-packages-text',
+        search: 'ota-update.search',
+        selectedEntities: 'ota-update.selected-package'
+      }
+    ],
+    [
+      EntityType.RPC,
+      {
+        type: 'entity.type-rpc'
+      }
+    ],
+    [
+      EntityType.QUEUE,
+      {
+        type: 'entity.type-queue',
+        add: 'queue.add',
+        search: 'queue.search',
+        details: 'queue.details',
+        selectedEntities: 'queue.selected-queues'
+      }
+    ],
+    [
+      EntityType.NOTIFICATION,
+      {
+        type: 'entity.type-notification',
+        noEntities: 'notification.no-inbox-notification',
+        search: 'notification.search-notification',
+        selectedEntities: 'notification.selected-notifications'
+      }
+    ],
+    [
+      EntityType.NOTIFICATION_REQUEST,
+      {
+        type: 'entity.type-notification-request',
+        noEntities: 'notification.no-notification-request',
+        selectedEntities: 'notification.selected-requests'
+      }
+    ],
+    [
+      EntityType.NOTIFICATION_RULE,
+      {
+        type: 'entity.type-notification-rule',
+        noEntities: 'notification.no-rules-notification',
+        search: 'notification.search-rules',
+        selectedEntities: 'notification.selected-rules'
+      }
+    ],
+    [
+      EntityType.NOTIFICATION_TARGET,
+      {
+        type: 'entity.type-notification-target',
+        noEntities: 'notification.no-recipients-notification',
+        search: 'notification.search-recipients',
+        selectedEntities: 'notification.selected-recipients'
+      }
+    ],
+    [
+      EntityType.NOTIFICATION_TEMPLATE,
+      {
+        type: 'entity.type-notification-template',
+        noEntities: 'notification.no-notification-templates',
+        search: 'notification.search-templates',
+        selectedEntities: 'notification.selected-template'
       }
     ]
   ]
@@ -325,9 +433,21 @@ export const entityTypeResources = new Map<EntityType, EntityTypeResource<BaseDa
       }
     ],
     [
+      EntityType.ASSET_PROFILE,
+      {
+        helpLinkId: 'assetProfiles'
+      }
+    ],
+    [
       EntityType.ASSET,
       {
         helpLinkId: 'assets'
+      }
+    ],
+    [
+      EntityType.EDGE,
+      {
+        helpLinkId: 'edges'
       }
     ],
     [
@@ -353,9 +473,45 @@ export const entityTypeResources = new Map<EntityType, EntityTypeResource<BaseDa
       {
         helpLinkId: 'widgetsBundles'
       }
+    ],
+    [
+      EntityType.TB_RESOURCE,
+      {
+        helpLinkId: 'lwm2mResourceLibrary'
+      }
+    ],
+    [
+      EntityType.OTA_PACKAGE,
+      {
+        helpLinkId: 'otaUpdates'
+      }
+    ],
+    [
+      EntityType.QUEUE,
+      {
+        helpLinkId: 'queue'
+      }
     ]
   ]
 );
+
+export const baseDetailsPageByEntityType = new Map<EntityType, string>([
+  [EntityType.TENANT, '/tenants'],
+  [EntityType.TENANT_PROFILE, '/tenantProfiles'],
+  [EntityType.CUSTOMER, '/customers'],
+  [EntityType.USER, '/users'],
+  [EntityType.DASHBOARD, '/dashboards'],
+  [EntityType.ASSET, '/entities/assets'],
+  [EntityType.DEVICE, '/entities/devices'],
+  [EntityType.DEVICE_PROFILE, '/profiles/deviceProfiles'],
+  [EntityType.ASSET_PROFILE, '/profiles/assetProfiles'],
+  [EntityType.RULE_CHAIN, '/ruleChains'],
+  [EntityType.EDGE, '/edgeManagement/instances'],
+  [EntityType.ENTITY_VIEW, '/entities/entityViews'],
+  [EntityType.TB_RESOURCE, '/resources/resources-library'],
+  [EntityType.OTA_PACKAGE, '/features/otaUpdates'],
+  [EntityType.QUEUE, '/settings/queues']
+]);
 
 export interface EntitySubtype {
   tenantId: TenantId;

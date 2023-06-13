@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@ import lombok.EqualsAndHashCode;
 import org.hibernate.annotations.TypeDef;
 import org.thingsboard.server.common.data.ApiUsageState;
 import org.thingsboard.server.common.data.ApiUsageStateValue;
+import org.thingsboard.server.common.data.id.ApiUsageStateId;
 import org.thingsboard.server.common.data.id.EntityIdFactory;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.id.ApiUsageStateId;
 import org.thingsboard.server.dao.model.BaseEntity;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
@@ -69,6 +69,9 @@ public class ApiUsageStateEntity extends BaseSqlEntity<ApiUsageState> implements
     @Enumerated(EnumType.STRING)
     @Column(name = ModelConstants.API_USAGE_STATE_SMS_EXEC_COLUMN)
     private ApiUsageStateValue smsExecState = ApiUsageStateValue.ENABLED;
+    @Enumerated(EnumType.STRING)
+    @Column(name = ModelConstants.API_USAGE_STATE_ALARM_EXEC_COLUMN)
+    private ApiUsageStateValue alarmExecState = ApiUsageStateValue.ENABLED;
 
     public ApiUsageStateEntity() {
     }
@@ -91,6 +94,7 @@ public class ApiUsageStateEntity extends BaseSqlEntity<ApiUsageState> implements
         this.jsExecState = ur.getJsExecState();
         this.emailExecState = ur.getEmailExecState();
         this.smsExecState = ur.getSmsExecState();
+        this.alarmExecState = ur.getAlarmExecState();
     }
 
     @Override
@@ -98,7 +102,7 @@ public class ApiUsageStateEntity extends BaseSqlEntity<ApiUsageState> implements
         ApiUsageState ur = new ApiUsageState(new ApiUsageStateId(this.getUuid()));
         ur.setCreatedTime(createdTime);
         if (tenantId != null) {
-            ur.setTenantId(new TenantId(tenantId));
+            ur.setTenantId(TenantId.fromUUID(tenantId));
         }
         if (entityId != null) {
             ur.setEntityId(EntityIdFactory.getByTypeAndUuid(entityType, entityId));
@@ -109,6 +113,7 @@ public class ApiUsageStateEntity extends BaseSqlEntity<ApiUsageState> implements
         ur.setJsExecState(jsExecState);
         ur.setEmailExecState(emailExecState);
         ur.setSmsExecState(smsExecState);
+        ur.setAlarmExecState(alarmExecState);
         return ur;
     }
 

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,18 @@
  */
 package org.thingsboard.server.transport.coap.adaptors;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.DynamicMessage;
 import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.util.JsonFormat;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.californium.core.coap.CoAP;
+import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.transport.adaptor.AdaptorException;
 import org.thingsboard.server.common.transport.adaptor.JsonConverter;
@@ -41,8 +43,9 @@ public class ProtoCoapAdaptor implements CoapTransportAdaptor {
 
     @Override
     public TransportProtos.PostTelemetryMsg convertToPostTelemetry(UUID sessionId, Request inbound, Descriptors.Descriptor telemetryMsgDescriptor) throws AdaptorException {
+        ProtoConverter.validateDescriptor(telemetryMsgDescriptor);
         try {
-            return JsonConverter.convertToTelemetryProto(new JsonParser().parse(dynamicMsgToJson(inbound.getPayload(), telemetryMsgDescriptor)));
+            return JsonConverter.convertToTelemetryProto(new JsonParser().parse(ProtoConverter.dynamicMsgToJson(inbound.getPayload(), telemetryMsgDescriptor)));
         } catch (Exception e) {
             throw new AdaptorException(e);
         }
@@ -50,8 +53,9 @@ public class ProtoCoapAdaptor implements CoapTransportAdaptor {
 
     @Override
     public TransportProtos.PostAttributeMsg convertToPostAttributes(UUID sessionId, Request inbound, Descriptors.Descriptor attributesMsgDescriptor) throws AdaptorException {
+        ProtoConverter.validateDescriptor(attributesMsgDescriptor);
         try {
-            return JsonConverter.convertToAttributesProto(new JsonParser().parse(dynamicMsgToJson(inbound.getPayload(), attributesMsgDescriptor)));
+            return JsonConverter.convertToAttributesProto(new JsonParser().parse(ProtoConverter.dynamicMsgToJson(inbound.getPayload(), attributesMsgDescriptor)));
         } catch (Exception e) {
             throw new AdaptorException(e);
         }
@@ -63,16 +67,17 @@ public class ProtoCoapAdaptor implements CoapTransportAdaptor {
     }
 
     @Override
-    public TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound) throws AdaptorException {
+    public TransportProtos.ToDeviceRpcResponseMsg convertToDeviceRpcResponse(UUID sessionId, Request inbound, Descriptors.Descriptor rpcResponseMsgDescriptor) throws AdaptorException {
         Optional<Integer> requestId = CoapTransportResource.getRequestId(inbound);
         if (requestId.isEmpty()) {
             throw new AdaptorException("Request id is missing!");
         } else {
+            ProtoConverter.validateDescriptor(rpcResponseMsgDescriptor);
             try {
-                String payload = TransportProtos.ToDeviceRpcResponseMsg.parseFrom(inbound.getPayload()).getPayload();
-                return TransportProtos.ToDeviceRpcResponseMsg.newBuilder().setRequestId(requestId.get())
-                        .setPayload(payload).build();
-            } catch (InvalidProtocolBufferException e) {
+                JsonElement response = new JsonParser().parse(ProtoConverter.dynamicMsgToJson(inbound.getPayload(), rpcResponseMsgDescriptor));
+                return TransportProtos.ToDeviceRpcResponseMsg.newBuilder().setRequestId(requestId.orElseThrow(() -> new AdaptorException("Request id is missing!")))
+                        .setPayload(response.toString()).build();
+            } catch (Exception e) {
                 throw new AdaptorException(e);
             }
         }
@@ -107,13 +112,13 @@ public class ProtoCoapAdaptor implements CoapTransportAdaptor {
     }
 
     @Override
-    public Response convertToPublish(boolean isConfirmable, TransportProtos.AttributeUpdateNotificationMsg msg) throws AdaptorException {
-        return getObserveNotification(isConfirmable, msg.toByteArray());
+    public Response convertToPublish(TransportProtos.AttributeUpdateNotificationMsg msg) throws AdaptorException {
+        return getObserveNotification(msg.toByteArray());
     }
 
     @Override
-    public Response convertToPublish(boolean isConfirmable, TransportProtos.ToDeviceRpcRequestMsg msg) throws AdaptorException {
-        return getObserveNotification(isConfirmable, msg.toByteArray());
+    public Response convertToPublish(TransportProtos.ToDeviceRpcRequestMsg rpcRequest, DynamicMessage.Builder rpcRequestDynamicMessageBuilder) throws AdaptorException {
+        return getObserveNotification(ProtoConverter.convertToRpcRequest(rpcRequest, rpcRequestDynamicMessageBuilder));
     }
 
     @Override
@@ -125,25 +130,34 @@ public class ProtoCoapAdaptor implements CoapTransportAdaptor {
 
     @Override
     public Response convertToPublish(TransportProtos.GetAttributeResponseMsg msg) throws AdaptorException {
-        if (msg.getClientAttributeListCount() == 0 && msg.getSharedAttributeListCount() == 0) {
-            return new Response(CoAP.ResponseCode.NOT_FOUND);
+        if (msg.getSharedStateMsg()) {
+            if (StringUtils.isEmpty(msg.getError())) {
+                Response response = new Response(CoAP.ResponseCode.CONTENT);
+                TransportProtos.AttributeUpdateNotificationMsg notificationMsg = TransportProtos.AttributeUpdateNotificationMsg.newBuilder().addAllSharedUpdated(msg.getSharedAttributeListList()).build();
+                response.setPayload(notificationMsg.toByteArray());
+                return response;
+            } else {
+                return new Response(CoAP.ResponseCode.INTERNAL_SERVER_ERROR);
+            }
         } else {
-            Response response = new Response(CoAP.ResponseCode.CONTENT);
-            response.setPayload(msg.toByteArray());
-            return response;
+            if (msg.getClientAttributeListCount() == 0 && msg.getSharedAttributeListCount() == 0) {
+                return new Response(CoAP.ResponseCode.NOT_FOUND);
+            } else {
+                Response response = new Response(CoAP.ResponseCode.CONTENT);
+                response.setPayload(msg.toByteArray());
+                return response;
+            }
         }
     }
 
-    private Response getObserveNotification(boolean confirmable, byte[] notification) {
+    private Response getObserveNotification(byte[] notification) {
         Response response = new Response(CoAP.ResponseCode.CONTENT);
         response.setPayload(notification);
-        response.setConfirmable(confirmable);
         return response;
     }
 
-    private String dynamicMsgToJson(byte[] bytes, Descriptors.Descriptor descriptor) throws InvalidProtocolBufferException {
-        DynamicMessage dynamicMessage = DynamicMessage.parseFrom(descriptor, bytes);
-        return JsonFormat.printer().includingDefaultValueFields().print(dynamicMessage);
+    @Override
+    public int getContentFormat() {
+        return MediaTypeRegistry.APPLICATION_OCTET_STREAM;
     }
-
 }

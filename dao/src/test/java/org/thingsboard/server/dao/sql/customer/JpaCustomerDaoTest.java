@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.dao.AbstractJpaDaoTest;
 import org.thingsboard.server.dao.customer.CustomerDao;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -76,8 +75,8 @@ public class JpaCustomerDaoTest extends AbstractJpaDaoTest {
     private void createCustomer(UUID tenantId, int index) {
         Customer customer = new Customer();
         customer.setId(new CustomerId(Uuids.timeBased()));
-        customer.setTenantId(new TenantId(tenantId));
+        customer.setTenantId(TenantId.fromUUID(tenantId));
         customer.setTitle("CUSTOMER_" + index);
-        customerDao.save(new TenantId(tenantId), customer);
+        customerDao.save(TenantId.fromUUID(tenantId), customer);
     }
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@
  */
 package org.thingsboard.server.service.subscription;
 
-import org.thingsboard.server.common.data.alarm.Alarm;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.server.common.data.alarm.AlarmInfo;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.EntityIdFactory;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BasicTsKvEntry;
@@ -30,27 +32,33 @@ import org.thingsboard.server.common.data.kv.KvEntry;
 import org.thingsboard.server.common.data.kv.LongDataEntry;
 import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
-import org.thingsboard.server.dao.util.mapping.JacksonUtil;
 import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.gen.transport.TransportProtos.KeyValueProto;
 import org.thingsboard.server.gen.transport.TransportProtos.KeyValueType;
 import org.thingsboard.server.gen.transport.TransportProtos.SubscriptionMgrMsgProto;
+import org.thingsboard.server.gen.transport.TransportProtos.TbAlarmDeleteProto;
+import org.thingsboard.server.gen.transport.TransportProtos.TbAlarmUpdateProto;
+import org.thingsboard.server.gen.transport.TransportProtos.TbAttributeDeleteProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbAttributeSubscriptionProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbAttributeUpdateProto;
-import org.thingsboard.server.gen.transport.TransportProtos.TbAttributeDeleteProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbSubscriptionCloseProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbSubscriptionKetStateProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbSubscriptionProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbSubscriptionUpdateProto;
+import org.thingsboard.server.gen.transport.TransportProtos.TbSubscriptionUpdateTsValue;
+import org.thingsboard.server.gen.transport.TransportProtos.TbTimeSeriesDeleteProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbTimeSeriesSubscriptionProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TbTimeSeriesUpdateProto;
 import org.thingsboard.server.gen.transport.TransportProtos.ToCoreMsg;
+import org.thingsboard.server.gen.transport.TransportProtos.ToCoreNotificationMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.TsKvProto;
-import org.thingsboard.server.gen.transport.TransportProtos.TbAlarmUpdateProto;
-import org.thingsboard.server.gen.transport.TransportProtos.TbAlarmDeleteProto;
-import org.thingsboard.server.service.telemetry.sub.AlarmSubscriptionUpdate;
-import org.thingsboard.server.service.telemetry.sub.SubscriptionErrorCode;
-import org.thingsboard.server.service.telemetry.sub.TelemetrySubscriptionUpdate;
+import org.thingsboard.server.service.ws.notification.sub.NotificationRequestUpdate;
+import org.thingsboard.server.service.ws.notification.sub.NotificationUpdate;
+import org.thingsboard.server.service.ws.notification.sub.NotificationsCountSubscription;
+import org.thingsboard.server.service.ws.notification.sub.NotificationsSubscription;
+import org.thingsboard.server.service.ws.notification.sub.NotificationsSubscriptionUpdate;
+import org.thingsboard.server.service.ws.telemetry.sub.AlarmSubscriptionUpdate;
+import org.thingsboard.server.service.ws.telemetry.sub.TelemetrySubscriptionUpdate;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -103,6 +111,17 @@ public class TbSubscriptionUtils {
                         .setTs(alarmSub.getTs());
                 msgBuilder.setAlarmSub(alarmSubProto.build());
                 break;
+            case NOTIFICATIONS:
+                NotificationsSubscription notificationsSub = (NotificationsSubscription) subscription;
+                msgBuilder.setNotificationsSub(TransportProtos.NotificationsSubscriptionProto.newBuilder()
+                        .setSub(subscriptionProto)
+                        .setLimit(notificationsSub.getLimit()));
+                break;
+            case NOTIFICATIONS_COUNT:
+                NotificationsCountSubscription notificationsCountSub = (NotificationsCountSubscription) subscription;
+                msgBuilder.setNotificationsCountSub(TransportProtos.NotificationsCountSubscriptionProto.newBuilder()
+                        .setSub(subscriptionProto));
+                break;
         }
         return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
     }
@@ -123,7 +142,7 @@ public class TbSubscriptionUtils {
                 .sessionId(subProto.getSessionId())
                 .subscriptionId(subProto.getSubscriptionId())
                 .entityId(EntityIdFactory.getByTypeAndUuid(subProto.getEntityType(), new UUID(subProto.getEntityIdMSB(), subProto.getEntityIdLSB())))
-                .tenantId(new TenantId(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
+                .tenantId(TenantId.fromUUID(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
 
         builder.scope(TbAttributeSubscriptionScope.valueOf(attributeSub.getScope()));
         builder.allKeys(attributeSub.getAllKeys());
@@ -140,7 +159,7 @@ public class TbSubscriptionUtils {
                 .sessionId(subProto.getSessionId())
                 .subscriptionId(subProto.getSubscriptionId())
                 .entityId(EntityIdFactory.getByTypeAndUuid(subProto.getEntityType(), new UUID(subProto.getEntityIdMSB(), subProto.getEntityIdLSB())))
-                .tenantId(new TenantId(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
+                .tenantId(TenantId.fromUUID(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
 
         builder.allKeys(telemetrySub.getAllKeys());
         Map<String, Long> keyStates = new HashMap<>();
@@ -159,9 +178,32 @@ public class TbSubscriptionUtils {
                 .sessionId(subProto.getSessionId())
                 .subscriptionId(subProto.getSubscriptionId())
                 .entityId(EntityIdFactory.getByTypeAndUuid(subProto.getEntityType(), new UUID(subProto.getEntityIdMSB(), subProto.getEntityIdLSB())))
-                .tenantId(new TenantId(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
+                .tenantId(TenantId.fromUUID(new UUID(subProto.getTenantIdMSB(), subProto.getTenantIdLSB())));
         builder.ts(alarmSub.getTs());
         return builder.build();
+    }
+
+    public static NotificationsSubscription fromProto(TransportProtos.NotificationsSubscriptionProto notificationsSub) {
+        TbSubscriptionProto sub = notificationsSub.getSub();
+        return NotificationsSubscription.builder()
+                .serviceId(sub.getServiceId())
+                .sessionId(sub.getSessionId())
+                .subscriptionId(sub.getSubscriptionId())
+                .tenantId(TenantId.fromUUID(new UUID(sub.getTenantIdMSB(), sub.getTenantIdLSB())))
+                .entityId(EntityIdFactory.getByTypeAndUuid(sub.getEntityType(), new UUID(sub.getEntityIdMSB(), sub.getEntityIdLSB())))
+                .limit(notificationsSub.getLimit())
+                .build();
+    }
+
+    public static NotificationsCountSubscription fromProto(TransportProtos.NotificationsCountSubscriptionProto notificationsCountSub) {
+        TbSubscriptionProto sub = notificationsCountSub.getSub();
+        return NotificationsCountSubscription.builder()
+                .serviceId(sub.getServiceId())
+                .sessionId(sub.getSessionId())
+                .subscriptionId(sub.getSubscriptionId())
+                .tenantId(TenantId.fromUUID(new UUID(sub.getTenantIdMSB(), sub.getTenantIdLSB())))
+                .entityId(EntityIdFactory.getByTypeAndUuid(sub.getEntityType(), new UUID(sub.getEntityIdMSB(), sub.getEntityIdLSB())))
+                .build();
     }
 
     public static TelemetrySubscriptionUpdate fromProto(TbSubscriptionUpdateProto proto) {
@@ -171,10 +213,11 @@ public class TbSubscriptionUtils {
             Map<String, List<Object>> data = new TreeMap<>();
             proto.getDataList().forEach(v -> {
                 List<Object> values = data.computeIfAbsent(v.getKey(), k -> new ArrayList<>());
-                for (int i = 0; i < v.getTsCount(); i++) {
+                for (int i = 0; i < v.getTsValueCount(); i++) {
                     Object[] value = new Object[2];
-                    value[0] = v.getTs(i);
-                    value[1] = v.getValue(i);
+                    TbSubscriptionUpdateTsValue tsValue = v.getTsValue(i);
+                    value[0] = tsValue.getTs();
+                    value[1] = tsValue.hasValue() ? tsValue.getValue() : null;
                     values.add(value);
                 }
             });
@@ -186,8 +229,8 @@ public class TbSubscriptionUtils {
         if (proto.getErrorCode() > 0) {
             return new AlarmSubscriptionUpdate(proto.getSubscriptionId(), SubscriptionErrorCode.forCode(proto.getErrorCode()), proto.getErrorMsg());
         } else {
-            Alarm alarm = JacksonUtil.fromString(proto.getAlarm(), Alarm.class);
-            return new AlarmSubscriptionUpdate(proto.getSubscriptionId(), alarm);
+            AlarmInfo alarm = JacksonUtil.fromString(proto.getAlarm(), AlarmInfo.class);
+            return new AlarmSubscriptionUpdate(proto.getSubscriptionId(), alarm, proto.getDeleted());
         }
     }
 
@@ -202,6 +245,19 @@ public class TbSubscriptionUtils {
         ts.forEach(v -> builder.addData(toKeyValueProto(v.getTs(), v).build()));
         SubscriptionMgrMsgProto.Builder msgBuilder = SubscriptionMgrMsgProto.newBuilder();
         msgBuilder.setTsUpdate(builder);
+        return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
+    }
+
+    public static ToCoreMsg toTimeseriesDeleteProto(TenantId tenantId, EntityId entityId, List<String> keys) {
+        TbTimeSeriesDeleteProto.Builder builder = TbTimeSeriesDeleteProto.newBuilder();
+        builder.setEntityType(entityId.getEntityType().name());
+        builder.setEntityIdMSB(entityId.getId().getMostSignificantBits());
+        builder.setEntityIdLSB(entityId.getId().getLeastSignificantBits());
+        builder.setTenantIdMSB(tenantId.getId().getMostSignificantBits());
+        builder.setTenantIdLSB(tenantId.getId().getLeastSignificantBits());
+        builder.addAllKeys(keys);
+        SubscriptionMgrMsgProto.Builder msgBuilder = SubscriptionMgrMsgProto.newBuilder();
+        msgBuilder.setTsDelete(builder);
         return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
     }
 
@@ -220,7 +276,7 @@ public class TbSubscriptionUtils {
         return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
     }
 
-    public static ToCoreMsg toAttributesDeleteProto(TenantId tenantId, EntityId entityId, String scope, List<String> keys) {
+    public static ToCoreMsg toAttributesDeleteProto(TenantId tenantId, EntityId entityId, String scope, List<String> keys, boolean notifyDevice) {
         TbAttributeDeleteProto.Builder builder = TbAttributeDeleteProto.newBuilder();
         builder.setEntityType(entityId.getEntityType().name());
         builder.setEntityIdMSB(entityId.getId().getMostSignificantBits());
@@ -229,6 +285,7 @@ public class TbSubscriptionUtils {
         builder.setTenantIdLSB(tenantId.getId().getLeastSignificantBits());
         builder.setScope(scope);
         builder.addAllKeys(keys);
+        builder.setNotifyDevice(notifyDevice);
 
         SubscriptionMgrMsgProto.Builder msgBuilder = SubscriptionMgrMsgProto.newBuilder();
         msgBuilder.setAttrDelete(builder);
@@ -299,7 +356,7 @@ public class TbSubscriptionUtils {
         return entry;
     }
 
-    public static ToCoreMsg toAlarmUpdateProto(TenantId tenantId, EntityId entityId, Alarm alarm) {
+    public static ToCoreMsg toAlarmUpdateProto(TenantId tenantId, EntityId entityId, AlarmInfo alarm) {
         TbAlarmUpdateProto.Builder builder = TbAlarmUpdateProto.newBuilder();
         builder.setEntityType(entityId.getEntityType().name());
         builder.setEntityIdMSB(entityId.getId().getMostSignificantBits());
@@ -312,7 +369,7 @@ public class TbSubscriptionUtils {
         return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
     }
 
-    public static ToCoreMsg toAlarmDeletedProto(TenantId tenantId, EntityId entityId, Alarm alarm) {
+    public static ToCoreMsg toAlarmDeletedProto(TenantId tenantId, EntityId entityId, AlarmInfo alarm) {
         TbAlarmDeleteProto.Builder builder = TbAlarmDeleteProto.newBuilder();
         builder.setEntityType(entityId.getEntityType().name());
         builder.setEntityIdMSB(entityId.getId().getMostSignificantBits());
@@ -324,4 +381,50 @@ public class TbSubscriptionUtils {
         msgBuilder.setAlarmDelete(builder);
         return ToCoreMsg.newBuilder().setToSubscriptionMgrMsg(msgBuilder.build()).build();
     }
+
+    public static ToCoreNotificationMsg notificationsSubUpdateToProto(TbSubscription subscription, NotificationsSubscriptionUpdate update) {
+        TransportProtos.NotificationsSubscriptionUpdateProto.Builder updateProto = TransportProtos.NotificationsSubscriptionUpdateProto.newBuilder()
+                .setSessionId(subscription.getSessionId())
+                .setSubscriptionId(subscription.getSubscriptionId());
+        if (update.getNotificationUpdate() != null) {
+            updateProto.setNotificationUpdate(JacksonUtil.toString(update.getNotificationUpdate()));
+        }
+        if (update.getNotificationRequestUpdate() != null) {
+            updateProto.setNotificationRequestUpdate(JacksonUtil.toString(update.getNotificationRequestUpdate()));
+        }
+        return ToCoreNotificationMsg.newBuilder()
+                .setToLocalSubscriptionServiceMsg(TransportProtos.LocalSubscriptionServiceMsgProto.newBuilder()
+                        .setNotificationsSubUpdate(updateProto)
+                        .build())
+                .build();
+    }
+
+    public static ToCoreMsg notificationUpdateToProto(TenantId tenantId, UserId recipientId, NotificationUpdate notificationUpdate) {
+        TransportProtos.NotificationUpdateProto updateProto = TransportProtos.NotificationUpdateProto.newBuilder()
+                .setTenantIdMSB(tenantId.getId().getMostSignificantBits())
+                .setTenantIdLSB(tenantId.getId().getLeastSignificantBits())
+                .setRecipientIdMSB(recipientId.getId().getMostSignificantBits())
+                .setRecipientIdLSB(recipientId.getId().getLeastSignificantBits())
+                .setUpdate(JacksonUtil.toString(notificationUpdate))
+                .build();
+        return ToCoreMsg.newBuilder()
+                .setToSubscriptionMgrMsg(SubscriptionMgrMsgProto.newBuilder()
+                        .setNotificationUpdate(updateProto)
+                        .build())
+                .build();
+    }
+
+    public static ToCoreNotificationMsg notificationRequestUpdateToProto(TenantId tenantId, NotificationRequestUpdate notificationRequestUpdate) {
+        TransportProtos.NotificationRequestUpdateProto updateProto = TransportProtos.NotificationRequestUpdateProto.newBuilder()
+                .setTenantIdMSB(tenantId.getId().getMostSignificantBits())
+                .setTenantIdLSB(tenantId.getId().getLeastSignificantBits())
+                .setUpdate(JacksonUtil.toString(notificationRequestUpdate))
+                .build();
+        return ToCoreNotificationMsg.newBuilder()
+                .setToSubscriptionMgrMsg(SubscriptionMgrMsgProto.newBuilder()
+                        .setNotificationRequestUpdate(updateProto)
+                        .build())
+                .build();
+    }
+
 }

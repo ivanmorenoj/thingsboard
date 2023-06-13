@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,29 @@
  */
 package org.thingsboard.server.rules.flow;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.thingsboard.rule.engine.flow.TbRuleChainInputNodeConfiguration;
 import org.thingsboard.rule.engine.metadata.TbGetAttributesNodeConfiguration;
 import org.thingsboard.server.actors.ActorSystemContext;
-import org.thingsboard.server.common.data.*;
+import org.thingsboard.server.common.data.DataConstants;
+import org.thingsboard.server.common.data.Device;
+import org.thingsboard.server.common.data.EventInfo;
+import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.User;
+import org.thingsboard.server.common.data.event.Event;
 import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
 import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.page.PageData;
+import org.thingsboard.server.common.data.rule.NodeConnectionInfo;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainMetaData;
 import org.thingsboard.server.common.data.rule.RuleNode;
@@ -38,12 +48,14 @@ import org.thingsboard.server.common.msg.queue.QueueToRuleEngineMsg;
 import org.thingsboard.server.common.msg.queue.TbMsgCallback;
 import org.thingsboard.server.controller.AbstractRuleEngineControllerTest;
 import org.thingsboard.server.dao.attributes.AttributesService;
+import org.thingsboard.server.dao.event.EventService;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static org.mockito.Mockito.spy;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -61,8 +73,26 @@ public abstract class AbstractRuleEngineFlowIntegrationTest extends AbstractRule
     @Autowired
     protected AttributesService attributesService;
 
+    @Autowired
+    protected EventService eventService;
+
     @Before
     public void beforeTest() throws Exception {
+
+        EventService spyEventService = spy(eventService);
+
+        Mockito.doAnswer((Answer<ListenableFuture<Void>>) invocation -> {
+            Object[] args = invocation.getArguments();
+            Event event = (Event) args[0];
+            ListenableFuture<Void> future = eventService.saveAsync(event);
+            try {
+                future.get();
+            } catch (Exception e) {}
+            return future;
+        }).when(spyEventService).saveAsync(Mockito.any(Event.class));
+
+        ReflectionTestUtils.setField(actorSystem, "eventService", spyEventService);
+
         loginSysAdmin();
 
         Tenant tenant = new Tenant();
@@ -136,29 +166,27 @@ public abstract class AbstractRuleEngineFlowIntegrationTest extends AbstractRule
         device = doPost("/api/device", device, Device.class);
 
         attributesService.save(device.getTenantId(), device.getId(), DataConstants.SERVER_SCOPE,
-                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey1", "serverAttributeValue1"), System.currentTimeMillis())));
+                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey1", "serverAttributeValue1"), System.currentTimeMillis()))).get();
         attributesService.save(device.getTenantId(), device.getId(), DataConstants.SERVER_SCOPE,
-                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey2", "serverAttributeValue2"), System.currentTimeMillis())));
-
-
-        Thread.sleep(1000);
+                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey2", "serverAttributeValue2"), System.currentTimeMillis()))).get();
 
         TbMsgCallback tbMsgCallback = Mockito.mock(TbMsgCallback.class);
+        Mockito.when(tbMsgCallback.isMsgValid()).thenReturn(true);
         TbMsg tbMsg = TbMsg.newMsg("CUSTOM", device.getId(), new TbMsgMetaData(), "{}", tbMsgCallback);
         QueueToRuleEngineMsg qMsg = new QueueToRuleEngineMsg(savedTenant.getId(), tbMsg, null, null);
         // Pushing Message to the system
         actorSystem.tell(qMsg);
         Mockito.verify(tbMsgCallback, Mockito.timeout(10000)).onSuccess();
 
-        PageData<Event> eventsPage = getDebugEvents(savedTenant.getId(), ruleChain.getFirstRuleNodeId(), 1000);
-        List<Event> events = eventsPage.getData().stream().filter(filterByCustomEvent()).collect(Collectors.toList());
+        PageData<EventInfo> eventsPage = getDebugEvents(savedTenant.getId(), ruleChain.getFirstRuleNodeId(), 1000);
+        List<EventInfo> events = eventsPage.getData().stream().filter(filterByCustomEvent()).collect(Collectors.toList());
         Assert.assertEquals(2, events.size());
 
-        Event inEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.IN)).findFirst().get();
+        EventInfo inEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.IN)).findFirst().get();
         Assert.assertEquals(ruleChain.getFirstRuleNodeId(), inEvent.getEntityId());
         Assert.assertEquals(device.getId().getId().toString(), inEvent.getBody().get("entityId").asText());
 
-        Event outEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.OUT)).findFirst().get();
+        EventInfo outEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.OUT)).findFirst().get();
         Assert.assertEquals(ruleChain.getFirstRuleNodeId(), outEvent.getEntityId());
         Assert.assertEquals(device.getId().getId().toString(), outEvent.getBody().get("entityId").asText());
 
@@ -215,15 +243,26 @@ public abstract class AbstractRuleEngineFlowIntegrationTest extends AbstractRule
         configuration1.setServerAttributeNames(Collections.singletonList("serverAttributeKey1"));
         ruleNode1.setConfiguration(mapper.valueToTree(configuration1));
 
-        rootMetaData.setNodes(Collections.singletonList(ruleNode1));
+        RuleNode ruleNode12 = new RuleNode();
+        ruleNode12.setName("Simple Rule Node 1");
+        ruleNode12.setType(org.thingsboard.rule.engine.flow.TbRuleChainInputNode.class.getName());
+        ruleNode12.setDebugMode(true);
+        TbRuleChainInputNodeConfiguration configuration12 = new TbRuleChainInputNodeConfiguration();
+        configuration12.setRuleChainId(secondaryRuleChain.getId().getId().toString());
+        ruleNode12.setConfiguration(mapper.valueToTree(configuration12));
+
+        rootMetaData.setNodes(Arrays.asList(ruleNode1, ruleNode12));
         rootMetaData.setFirstNodeIndex(0);
-        rootMetaData.addRuleChainConnectionInfo(0, secondaryRuleChain.getId(), "Success", mapper.createObjectNode());
+        NodeConnectionInfo connection = new NodeConnectionInfo();
+        connection.setFromIndex(0);
+        connection.setToIndex(1);
+        connection.setType("Success");
+        rootMetaData.setConnections(Collections.singletonList(connection));
         rootMetaData = saveRuleChainMetaData(rootMetaData);
         Assert.assertNotNull(rootMetaData);
 
         rootRuleChain = getRuleChain(rootRuleChain.getId());
         Assert.assertNotNull(rootRuleChain.getFirstRuleNodeId());
-
 
         RuleChainMetaData secondaryMetaData = new RuleChainMetaData();
         secondaryMetaData.setRuleChainId(secondaryRuleChain.getId());
@@ -248,14 +287,12 @@ public abstract class AbstractRuleEngineFlowIntegrationTest extends AbstractRule
         device = doPost("/api/device", device, Device.class);
 
         attributesService.save(device.getTenantId(), device.getId(), DataConstants.SERVER_SCOPE,
-                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey1", "serverAttributeValue1"), System.currentTimeMillis())));
+                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey1", "serverAttributeValue1"), System.currentTimeMillis()))).get();
         attributesService.save(device.getTenantId(), device.getId(), DataConstants.SERVER_SCOPE,
-                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey2", "serverAttributeValue2"), System.currentTimeMillis())));
-
-
-        Thread.sleep(1000);
+                Collections.singletonList(new BaseAttributeKvEntry(new StringDataEntry("serverAttributeKey2", "serverAttributeValue2"), System.currentTimeMillis()))).get();
 
         TbMsgCallback tbMsgCallback = Mockito.mock(TbMsgCallback.class);
+        Mockito.when(tbMsgCallback.isMsgValid()).thenReturn(true);
         TbMsg tbMsg = TbMsg.newMsg("CUSTOM", device.getId(), new TbMsgMetaData(), "{}", tbMsgCallback);
         QueueToRuleEngineMsg qMsg = new QueueToRuleEngineMsg(savedTenant.getId(), tbMsg, null, null);
         // Pushing Message to the system
@@ -263,16 +300,16 @@ public abstract class AbstractRuleEngineFlowIntegrationTest extends AbstractRule
 
         Mockito.verify(tbMsgCallback, Mockito.timeout(10000)).onSuccess();
 
-        PageData<Event> eventsPage = getDebugEvents(savedTenant.getId(), rootRuleChain.getFirstRuleNodeId(), 1000);
-        List<Event> events = eventsPage.getData().stream().filter(filterByCustomEvent()).collect(Collectors.toList());
+        PageData<EventInfo> eventsPage = getDebugEvents(savedTenant.getId(), rootRuleChain.getFirstRuleNodeId(), 1000);
+        List<EventInfo> events = eventsPage.getData().stream().filter(filterByCustomEvent()).collect(Collectors.toList());
 
         Assert.assertEquals(2, events.size());
 
-        Event inEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.IN)).findFirst().get();
+        EventInfo inEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.IN)).findFirst().get();
         Assert.assertEquals(rootRuleChain.getFirstRuleNodeId(), inEvent.getEntityId());
         Assert.assertEquals(device.getId().getId().toString(), inEvent.getBody().get("entityId").asText());
 
-        Event outEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.OUT)).findFirst().get();
+        EventInfo outEvent = events.stream().filter(e -> e.getBody().get("type").asText().equals(DataConstants.OUT)).findFirst().get();
         Assert.assertEquals(rootRuleChain.getFirstRuleNodeId(), outEvent.getEntityId());
         Assert.assertEquals(device.getId().getId().toString(), outEvent.getBody().get("entityId").asText());
 

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,31 +15,43 @@
 ///
 
 import { Component, forwardRef, Input, OnInit } from '@angular/core';
-import { ControlValueAccessor, FormBuilder, FormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
+import {
+  ControlValueAccessor,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  ValidationErrors,
+  Validator,
+  Validators
+} from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@app/core/core.state';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
-import {
-  DeviceTransportConfiguration,
-  DeviceTransportType
-} from '@shared/models/device.models';
+import { DeviceTransportConfiguration, DeviceTransportType } from '@shared/models/device.models';
 import { deepClone } from '@core/utils';
 
 @Component({
   selector: 'tb-device-transport-configuration',
   templateUrl: './device-transport-configuration.component.html',
   styleUrls: [],
-  providers: [{
-    provide: NG_VALUE_ACCESSOR,
-    useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
-    multi: true
-  }]
+  providers: [
+    {
+      provide: NG_VALUE_ACCESSOR,
+      useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
+      multi: true
+    },
+    {
+      provide: NG_VALIDATORS,
+      useExisting: forwardRef(() => DeviceTransportConfigurationComponent),
+      multi: true
+    }]
 })
-export class DeviceTransportConfigurationComponent implements ControlValueAccessor, OnInit {
+export class DeviceTransportConfigurationComponent implements ControlValueAccessor, OnInit, Validator {
 
   deviceTransportType = DeviceTransportType;
 
-  deviceTransportConfigurationFormGroup: FormGroup;
+  deviceTransportConfigurationFormGroup: UntypedFormGroup;
 
   private requiredValue: boolean;
   get required(): boolean {
@@ -58,7 +70,7 @@ export class DeviceTransportConfigurationComponent implements ControlValueAccess
   private propagateChange = (v: any) => { };
 
   constructor(private store: Store<AppState>,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
   }
 
   registerOnChange(fn: any): void {
@@ -92,7 +104,15 @@ export class DeviceTransportConfigurationComponent implements ControlValueAccess
     if (configuration) {
       delete configuration.type;
     }
-    this.deviceTransportConfigurationFormGroup.patchValue({configuration}, {emitEvent: false});
+    setTimeout(() => {
+      this.deviceTransportConfigurationFormGroup.patchValue({configuration}, {emitEvent: false});
+    }, 0);
+  }
+
+  validate(): ValidationErrors | null {
+    return this.deviceTransportConfigurationFormGroup.valid ? null : {
+      deviceTransportConfiguration: false
+    };
   }
 
   private updateModel() {

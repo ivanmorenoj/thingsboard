@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.common.util.DonAsynchron;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.api.RuleNode;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.api.TbNode;
@@ -28,14 +29,12 @@ import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
 import org.thingsboard.rule.engine.api.TbRelationTypes;
 import org.thingsboard.rule.engine.api.util.TbNodeUtils;
-import org.thingsboard.rule.engine.telemetry.TbMsgTimeseriesNode;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
 import org.thingsboard.server.common.data.plugin.ComponentType;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.session.SessionMsgType;
 import org.thingsboard.server.dao.timeseries.TimeseriesService;
-import org.thingsboard.server.dao.util.mapping.JacksonUtil;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -82,7 +81,7 @@ public class CalculateDeltaNode implements TbNode {
                 DonAsynchron.withCallback(getLastValue(msg.getOriginator()),
                         previousData -> {
                             double currentValue = json.get(inputKey).asDouble();
-                            long currentTs = TbMsgTimeseriesNode.getTs(msg);
+                            long currentTs = msg.getMetaDataTs();
 
                             if (useCache) {
                                 cache.put(msg.getOriginator(), new ValueWithTs(currentTs, currentValue));

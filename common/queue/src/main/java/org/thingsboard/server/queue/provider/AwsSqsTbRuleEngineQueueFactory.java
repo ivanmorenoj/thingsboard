@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import com.google.protobuf.util.JsonFormat;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.data.queue.Queue;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.gen.js.JsInvokeProtos;
 import org.thingsboard.server.gen.transport.TransportProtos;
@@ -32,12 +33,12 @@ import org.thingsboard.server.queue.TbQueueRequestTemplate;
 import org.thingsboard.server.queue.common.DefaultTbQueueRequestTemplate;
 import org.thingsboard.server.queue.common.TbProtoJsQueueMsg;
 import org.thingsboard.server.queue.common.TbProtoQueueMsg;
-import org.thingsboard.server.queue.discovery.PartitionService;
+import org.thingsboard.server.queue.discovery.NotificationsTopicService;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
 import org.thingsboard.server.queue.settings.TbQueueCoreSettings;
 import org.thingsboard.server.queue.settings.TbQueueRemoteJsInvokeSettings;
 import org.thingsboard.server.queue.settings.TbQueueRuleEngineSettings;
-import org.thingsboard.server.queue.settings.TbRuleEngineQueueConfiguration;
+import org.thingsboard.server.queue.settings.TbQueueTransportNotificationSettings;
 import org.thingsboard.server.queue.sqs.TbAwsSqsAdmin;
 import org.thingsboard.server.queue.sqs.TbAwsSqsConsumerTemplate;
 import org.thingsboard.server.queue.sqs.TbAwsSqsProducerTemplate;
@@ -51,50 +52,55 @@ import java.nio.charset.StandardCharsets;
 @ConditionalOnExpression("'${queue.type:null}'=='aws-sqs' && '${service.type:null}'=='tb-rule-engine'")
 public class AwsSqsTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory {
 
-    private final PartitionService partitionService;
+    private final NotificationsTopicService notificationsTopicService;
     private final TbQueueCoreSettings coreSettings;
     private final TbServiceInfoProvider serviceInfoProvider;
     private final TbQueueRuleEngineSettings ruleEngineSettings;
     private final TbAwsSqsSettings sqsSettings;
     private final TbQueueRemoteJsInvokeSettings jsInvokeSettings;
+    private final TbQueueTransportNotificationSettings transportNotificationSettings;
 
     private final TbQueueAdmin coreAdmin;
     private final TbQueueAdmin ruleEngineAdmin;
     private final TbQueueAdmin jsExecutorAdmin;
     private final TbQueueAdmin notificationAdmin;
+    private final TbQueueAdmin otaAdmin;
 
-    public AwsSqsTbRuleEngineQueueFactory(PartitionService partitionService, TbQueueCoreSettings coreSettings,
+    public AwsSqsTbRuleEngineQueueFactory(NotificationsTopicService notificationsTopicService, TbQueueCoreSettings coreSettings,
                                           TbQueueRuleEngineSettings ruleEngineSettings,
                                           TbServiceInfoProvider serviceInfoProvider,
                                           TbAwsSqsSettings sqsSettings,
                                           TbAwsSqsQueueAttributes sqsQueueAttributes,
-                                          TbQueueRemoteJsInvokeSettings jsInvokeSettings) {
-        this.partitionService = partitionService;
+                                          TbQueueRemoteJsInvokeSettings jsInvokeSettings,
+                                          TbQueueTransportNotificationSettings transportNotificationSettings) {
+        this.notificationsTopicService = notificationsTopicService;
         this.coreSettings = coreSettings;
         this.serviceInfoProvider = serviceInfoProvider;
         this.ruleEngineSettings = ruleEngineSettings;
         this.sqsSettings = sqsSettings;
         this.jsInvokeSettings = jsInvokeSettings;
+        this.transportNotificationSettings = transportNotificationSettings;
 
         this.coreAdmin = new TbAwsSqsAdmin(sqsSettings, sqsQueueAttributes.getCoreAttributes());
         this.ruleEngineAdmin = new TbAwsSqsAdmin(sqsSettings, sqsQueueAttributes.getRuleEngineAttributes());
         this.jsExecutorAdmin = new TbAwsSqsAdmin(sqsSettings, sqsQueueAttributes.getJsExecutorAttributes());
         this.notificationAdmin = new TbAwsSqsAdmin(sqsSettings, sqsQueueAttributes.getNotificationsAttributes());
+        this.otaAdmin = new TbAwsSqsAdmin(sqsSettings, sqsQueueAttributes.getOtaAttributes());
     }
 
     @Override
     public TbQueueProducer<TbProtoQueueMsg<ToTransportMsg>> createTransportNotificationsMsgProducer() {
-        return new TbAwsSqsProducerTemplate<>(coreAdmin, sqsSettings, coreSettings.getTopic());
+        return new TbAwsSqsProducerTemplate<>(notificationAdmin, sqsSettings, transportNotificationSettings.getNotificationsTopic());
     }
 
     @Override
     public TbQueueProducer<TbProtoQueueMsg<ToRuleEngineMsg>> createRuleEngineMsgProducer() {
-        return new TbAwsSqsProducerTemplate<>(coreAdmin, sqsSettings, coreSettings.getTopic());
+        return new TbAwsSqsProducerTemplate<>(ruleEngineAdmin, sqsSettings, ruleEngineSettings.getTopic());
     }
 
     @Override
     public TbQueueProducer<TbProtoQueueMsg<TransportProtos.ToRuleEngineNotificationMsg>> createRuleEngineNotificationsMsgProducer() {
-        return new TbAwsSqsProducerTemplate<>(ruleEngineAdmin, sqsSettings, ruleEngineSettings.getTopic());
+        return new TbAwsSqsProducerTemplate<>(notificationAdmin, sqsSettings, ruleEngineSettings.getTopic());
     }
 
     @Override
@@ -104,19 +110,19 @@ public class AwsSqsTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory 
 
     @Override
     public TbQueueProducer<TbProtoQueueMsg<TransportProtos.ToCoreNotificationMsg>> createTbCoreNotificationsMsgProducer() {
-        return new TbAwsSqsProducerTemplate<>(coreAdmin, sqsSettings, coreSettings.getTopic());
+        return new TbAwsSqsProducerTemplate<>(notificationAdmin, sqsSettings, coreSettings.getTopic());
     }
 
     @Override
-    public TbQueueConsumer<TbProtoQueueMsg<ToRuleEngineMsg>> createToRuleEngineMsgConsumer(TbRuleEngineQueueConfiguration configuration) {
-        return new TbAwsSqsConsumerTemplate<>(ruleEngineAdmin, sqsSettings, ruleEngineSettings.getTopic(),
+    public TbQueueConsumer<TbProtoQueueMsg<ToRuleEngineMsg>> createToRuleEngineMsgConsumer(Queue configuration) {
+        return new TbAwsSqsConsumerTemplate<>(ruleEngineAdmin, sqsSettings, configuration.getTopic(),
                 msg -> new TbProtoQueueMsg<>(msg.getKey(), ToRuleEngineMsg.parseFrom(msg.getData()), msg.getHeaders()));
     }
 
     @Override
     public TbQueueConsumer<TbProtoQueueMsg<TransportProtos.ToRuleEngineNotificationMsg>> createToRuleEngineNotificationsMsgConsumer() {
         return new TbAwsSqsConsumerTemplate<>(notificationAdmin, sqsSettings,
-                partitionService.getNotificationsTopic(ServiceType.TB_RULE_ENGINE, serviceInfoProvider.getServiceId()).getFullTopicName(),
+                notificationsTopicService.getNotificationsTopic(ServiceType.TB_RULE_ENGINE, serviceInfoProvider.getServiceId()).getFullTopicName(),
                 msg -> new TbProtoQueueMsg<>(msg.getKey(), TransportProtos.ToRuleEngineNotificationMsg.parseFrom(msg.getData()), msg.getHeaders()));
     }
 
@@ -148,6 +154,12 @@ public class AwsSqsTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory 
         return new TbAwsSqsProducerTemplate<>(coreAdmin, sqsSettings, coreSettings.getUsageStatsTopic());
     }
 
+    @Override
+    public TbQueueProducer<TbProtoQueueMsg<TransportProtos.ToOtaPackageStateServiceMsg>> createToOtaPackageStateServiceMsgProducer() {
+        return new TbAwsSqsProducerTemplate<>(otaAdmin, sqsSettings, coreSettings.getOtaPackageTopic());
+    }
+
+
     @PreDestroy
     private void destroy() {
         if (coreAdmin != null) {
@@ -161,6 +173,9 @@ public class AwsSqsTbRuleEngineQueueFactory implements TbRuleEngineQueueFactory 
         }
         if (notificationAdmin != null) {
             notificationAdmin.destroy();
+        }
+        if (otaAdmin != null) {
+            otaAdmin.destroy();
         }
     }
 

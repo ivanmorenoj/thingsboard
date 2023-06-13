@@ -2,6 +2,7 @@
   "ruleChain": {
     "additionalInfo": null,
     "name": "Root Rule Chain",
+    "type": "CORE",
     "firstRuleNodeId": null,
     "root": true,
     "debugMode": false,
@@ -56,7 +57,9 @@
         "name": "Log RPC from Device",
         "debugMode": false,
         "configuration": {
-          "jsScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);"
+          "scriptLang": "TBEL",
+          "jsScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);",
+          "tbelScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);"
         }
       },
       {
@@ -68,7 +71,9 @@
         "name": "Log Other",
         "debugMode": false,
         "configuration": {
-          "jsScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);"
+          "scriptLang": "TBEL",
+          "jsScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);",
+          "tbelScript": "return '\\nIncoming message:\\n' + JSON.stringify(msg) + '\\nIncoming metadata:\\n' + JSON.stringify(metadata);"
         }
       },
       {

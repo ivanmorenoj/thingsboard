@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -21,35 +21,33 @@ import { AppState } from '@core/core.state';
 import {
   DataKey,
   Datasource,
+  datasourcesHasAggregation,
+  datasourcesHasOnlyComparisonAggregation,
   DatasourceType,
   datasourceTypeTranslationMap,
   defaultLegendConfig,
   GroupInfo,
   JsonSchema,
+  JsonSettingsSchema,
+  Widget,
   widgetType
 } from '@shared/models/widget.models';
 import {
   ControlValueAccessor,
-  FormArray,
-  FormBuilder,
-  FormControl,
-  FormGroup,
   NG_VALIDATORS,
   NG_VALUE_ACCESSOR,
+  UntypedFormArray,
+  UntypedFormBuilder,
+  UntypedFormControl,
+  UntypedFormGroup,
   Validator,
   Validators
 } from '@angular/forms';
 import { WidgetConfigComponentData } from '@home/models/widget-component.models';
-import { deepClone, isDefined, isObject, isUndefined } from '@app/core/utils';
-import {
-  alarmFields,
-  AlarmSearchStatus,
-  alarmSearchStatusTranslations,
-  AlarmSeverity,
-  alarmSeverityTranslations
-} from '@shared/models/alarm.models';
+import { deepClone, genNextLabel, isDefined, isObject } from '@app/core/utils';
+import { alarmFields, AlarmSearchStatus } from '@shared/models/alarm.models';
 import { IAliasController } from '@core/api/widget-api.models';
-import { EntityAlias, EntityAliases } from '@shared/models/alias.models';
+import { EntityAlias } from '@shared/models/alias.models';
 import { UtilsService } from '@core/services/utils.service';
 import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
 import { TranslateService } from '@ngx-translate/core';
@@ -65,13 +63,11 @@ import { MatDialog } from '@angular/material/dialog';
 import { EntityService } from '@core/http/entity.service';
 import { JsonFormComponentData } from '@shared/components/json-form/json-form-component.models';
 import { WidgetActionsData } from './action/manage-widget-actions.component.models';
-import { DashboardState } from '@shared/models/dashboard.models';
+import { Dashboard } from '@shared/models/dashboard.models';
 import { entityFields } from '@shared/models/entity.models';
-import { Filter, Filters } from '@shared/models/query/query.models';
+import { Filter } from '@shared/models/query/query.models';
 import { FilterDialogComponent, FilterDialogData } from '@home/components/filter/filter-dialog.component';
-import { COMMA, ENTER, SEMICOLON } from '@angular/cdk/keycodes';
-import { MatChipInputEvent } from '@angular/material/chips';
-import { DndDropEvent } from 'ngx-drag-drop';
+import { CdkDragDrop } from '@angular/cdk/drag-drop';
 
 const emptySettingsSchema: JsonSchema = {
   type: 'object',
@@ -101,23 +97,9 @@ const defaultSettingsForm = [
 })
 export class WidgetConfigComponent extends PageComponent implements OnInit, ControlValueAccessor, Validator {
 
-  readonly separatorKeysCodes: number[] = [ENTER, COMMA, SEMICOLON];
-
   widgetTypes = widgetType;
 
   entityTypes = EntityType;
-
-  alarmSearchStatuses = [AlarmSearchStatus.ACTIVE,
-                         AlarmSearchStatus.CLEARED,
-                         AlarmSearchStatus.ACK,
-                         AlarmSearchStatus.UNACK];
-
-  alarmSearchStatusTranslationMap = alarmSearchStatusTranslations;
-
-  alarmSeverities = Object.keys(AlarmSeverity);
-  alarmSeverityEnum = AlarmSeverity;
-
-  alarmSeverityTranslationMap = alarmSeverityTranslations;
 
   @Input()
   forceExpandDatasources: boolean;
@@ -126,16 +108,13 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
   aliasController: IAliasController;
 
   @Input()
-  entityAliases: EntityAliases;
+  dashboard: Dashboard;
 
   @Input()
-  filters: Filters;
+  widget: Widget;
 
   @Input()
   functionsOnly: boolean;
-
-  @Input()
-  dashboardStates: {[id: string]: DashboardState };
 
   @Input() disabled: boolean;
 
@@ -159,15 +138,21 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
 
   modelValue: WidgetConfigComponentData;
 
+  showLegendFieldset = true;
+
   private propagateChange = null;
 
-  public dataSettings: FormGroup;
-  public targetDeviceSettings: FormGroup;
-  public alarmSourceSettings: FormGroup;
-  public widgetSettings: FormGroup;
-  public layoutSettings: FormGroup;
-  public advancedSettings: FormGroup;
-  public actionsSettings: FormGroup;
+  public dataSettings: UntypedFormGroup;
+  public targetDeviceSettings: UntypedFormGroup;
+  public alarmSourceSettings: UntypedFormGroup;
+  public widgetSettings: UntypedFormGroup;
+  public layoutSettings: UntypedFormGroup;
+  public advancedSettings: UntypedFormGroup;
+  public actionsSettings: UntypedFormGroup;
+  public openExtensionPanel = true;
+  public timeseriesKeyError = false;
+
+  public datasourceError: string[] = [];
 
   private dataSettingsChangesSubscription: Subscription;
   private targetDeviceSettingsSubscription: Subscription;
@@ -182,7 +167,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
               private entityService: EntityService,
               private dialog: MatDialog,
               private translate: TranslateService,
-              private fb: FormBuilder) {
+              private fb: UntypedFormBuilder) {
     super(store);
   }
 
@@ -206,17 +191,37 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       padding: [null, []],
       margin: [null, []],
       widgetStyle: [null, []],
+      widgetCss: [null, []],
       titleStyle: [null, []],
+      pageSize: [1024, [Validators.min(1), Validators.pattern(/^\d*$/)]],
       units: [null, []],
       decimals: [null, [Validators.min(0), Validators.max(15), Validators.pattern(/^\d*$/)]],
+      noDataDisplayMessage: [null, []],
       showLegend: [null, []],
       legendConfig: [null, []]
     });
+    this.widgetSettings.get('showTitle').valueChanges.subscribe((value: boolean) => {
+      if (value) {
+        this.widgetSettings.get('titleStyle').enable({emitEvent: false});
+        this.widgetSettings.get('titleTooltip').enable({emitEvent: false});
+        this.widgetSettings.get('showTitleIcon').enable({emitEvent: false});
+      } else {
+        this.widgetSettings.get('titleStyle').disable({emitEvent: false});
+        this.widgetSettings.get('titleTooltip').disable({emitEvent: false});
+        this.widgetSettings.get('showTitleIcon').patchValue(false);
+        this.widgetSettings.get('showTitleIcon').disable({emitEvent: false});
+      }
+    });
+
     this.widgetSettings.get('showTitleIcon').valueChanges.subscribe((value: boolean) => {
       if (value) {
         this.widgetSettings.get('titleIcon').enable({emitEvent: false});
+        this.widgetSettings.get('iconColor').enable({emitEvent: false});
+        this.widgetSettings.get('iconSize').enable({emitEvent: false});
       } else {
         this.widgetSettings.get('titleIcon').disable({emitEvent: false});
+        this.widgetSettings.get('iconColor').disable({emitEvent: false});
+        this.widgetSettings.get('iconSize').disable({emitEvent: false});
       }
     });
     this.widgetSettings.get('showLegend').valueChanges.subscribe((value: boolean) => {
@@ -228,11 +233,17 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     });
     this.layoutSettings = this.fb.group({
       mobileOrder: [null, [Validators.pattern(/^-?[0-9]+$/)]],
-      mobileHeight: [null, [Validators.min(1), Validators.max(10), Validators.pattern(/^\d*$/)]]
+      mobileHeight: [null, [Validators.min(1), Validators.pattern(/^\d*$/)]],
+      mobileHide: [false],
+      desktopHide: [false]
     });
     this.actionsSettings = this.fb.group({
       actionsData: [null, []]
     });
+  }
+
+  ngOnDestroy(): void {
+    this.removeChangeSubscriptions();
   }
 
   private removeChangeSubscriptions() {
@@ -297,16 +308,18 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       this.datasourceTypes = [DatasourceType.function, DatasourceType.entity];
       if (this.widgetType === widgetType.latest) {
         this.datasourceTypes.push(DatasourceType.entityCount);
+        this.datasourceTypes.push(DatasourceType.alarmCount);
       }
     }
+
     this.dataSettings = this.fb.group({});
     this.targetDeviceSettings = this.fb.group({});
     this.alarmSourceSettings = this.fb.group({});
     this.advancedSettings = this.fb.group({});
-    if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm) {
-      this.dataSettings.addControl('useDashboardTimewindow', this.fb.control(null));
-      this.dataSettings.addControl('displayTimewindow', this.fb.control(null));
-      this.dataSettings.addControl('timewindow', this.fb.control(null));
+    if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm || this.widgetType === widgetType.latest) {
+      this.dataSettings.addControl('useDashboardTimewindow', this.fb.control(true));
+      this.dataSettings.addControl('displayTimewindow', this.fb.control({value: true, disabled: true}));
+      this.dataSettings.addControl('timewindow', this.fb.control({value: null, disabled: true}));
       this.dataSettings.get('useDashboardTimewindow').valueChanges.subscribe((value: boolean) => {
         if (value) {
           this.dataSettings.get('displayTimewindow').disable({emitEvent: false});
@@ -317,10 +330,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
         }
       });
       if (this.widgetType === widgetType.alarm) {
-        this.dataSettings.addControl('alarmStatusList', this.fb.control(null));
-        this.dataSettings.addControl('alarmSeverityList', this.fb.control(null));
-        this.dataSettings.addControl('alarmTypeList', this.fb.control(null));
-        this.dataSettings.addControl('searchPropagatedAlarms', this.fb.control(null));
+        this.dataSettings.addControl('alarmFilterConfig', this.fb.control(null));
       }
     }
     if (this.modelValue.isDataEnabled) {
@@ -341,8 +351,8 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       this.fb.control(null, []));
   }
 
-  datasourcesFormArray(): FormArray {
-    return this.dataSettings.get('datasources') as FormArray;
+  datasourcesFormArray(): UntypedFormArray {
+    return this.dataSettings.get('datasources') as UntypedFormArray;
   }
 
   registerOnChange(fn: any): void {
@@ -362,20 +372,22 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     if (this.modelValue) {
       if (this.widgetType !== this.modelValue.widgetType) {
         this.widgetType = this.modelValue.widgetType;
+        this.showLegendFieldset = (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.latest);
         this.buildForms();
       }
       const config = this.modelValue.config;
       const layout = this.modelValue.layout;
       if (config) {
         this.selectedTab = 0;
+        const displayWidgetTitle = isDefined(config.showTitle) ? config.showTitle : false;
         this.widgetSettings.patchValue({
             title: config.title,
-            showTitleIcon: isDefined(config.showTitleIcon) ? config.showTitleIcon : false,
+            showTitleIcon: isDefined(config.showTitleIcon) && displayWidgetTitle ? config.showTitleIcon : false,
             titleIcon: isDefined(config.titleIcon) ? config.titleIcon : '',
             iconColor: isDefined(config.iconColor) ? config.iconColor : 'rgba(0, 0, 0, 0.87)',
             iconSize: isDefined(config.iconSize) ? config.iconSize : '24px',
             titleTooltip: isDefined(config.titleTooltip) ? config.titleTooltip : '',
-            showTitle: config.showTitle,
+            showTitle: displayWidgetTitle,
             dropShadow: isDefined(config.dropShadow) ? config.dropShadow : true,
             enableFullscreen: isDefined(config.enableFullscreen) ? config.enableFullscreen : true,
             backgroundColor: config.backgroundColor,
@@ -383,23 +395,40 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
             padding: config.padding,
             margin: config.margin,
             widgetStyle: isDefined(config.widgetStyle) ? config.widgetStyle : {},
+            widgetCss: isDefined(config.widgetCss) ? config.widgetCss : '',
             titleStyle: isDefined(config.titleStyle) ? config.titleStyle : {
               fontSize: '16px',
               fontWeight: 400
             },
+            pageSize: isDefined(config.pageSize) ? config.pageSize : 1024,
             units: config.units,
             decimals: config.decimals,
+            noDataDisplayMessage: isDefined(config.noDataDisplayMessage) ? config.noDataDisplayMessage : '',
             showLegend: isDefined(config.showLegend) ? config.showLegend :
               this.widgetType === widgetType.timeseries,
             legendConfig: config.legendConfig || defaultLegendConfig(this.widgetType)
           },
           {emitEvent: false}
         );
+        const showTitle: boolean = this.widgetSettings.get('showTitle').value;
+        if (showTitle) {
+          this.widgetSettings.get('titleTooltip').enable({emitEvent: false});
+          this.widgetSettings.get('titleStyle').enable({emitEvent: false});
+          this.widgetSettings.get('showTitleIcon').enable({emitEvent: false});
+        } else {
+          this.widgetSettings.get('titleTooltip').disable({emitEvent: false});
+          this.widgetSettings.get('titleStyle').disable({emitEvent: false});
+          this.widgetSettings.get('showTitleIcon').disable({emitEvent: false});
+        }
         const showTitleIcon: boolean = this.widgetSettings.get('showTitleIcon').value;
         if (showTitleIcon) {
           this.widgetSettings.get('titleIcon').enable({emitEvent: false});
+          this.widgetSettings.get('iconColor').enable({emitEvent: false});
+          this.widgetSettings.get('iconSize').enable({emitEvent: false});
         } else {
           this.widgetSettings.get('titleIcon').disable({emitEvent: false});
+          this.widgetSettings.get('iconColor').disable({emitEvent: false});
+          this.widgetSettings.get('iconSize').disable({emitEvent: false});
         }
         const showLegend: boolean = this.widgetSettings.get('showLegend').value;
         if (showLegend) {
@@ -417,7 +446,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           },
           {emitEvent: false}
         );
-        if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm) {
+        if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm || this.widgetType === widgetType.latest) {
           const useDashboardTimewindow = isDefined(config.useDashboardTimewindow) ?
             config.useDashboardTimewindow : true;
           this.dataSettings.patchValue(
@@ -442,7 +471,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           if (this.widgetType !== widgetType.rpc &&
             this.widgetType !== widgetType.alarm &&
             this.widgetType !== widgetType.static) {
-            const datasourcesFormArray = this.dataSettings.get('datasources') as FormArray;
+            const datasourcesFormArray = this.dataSettings.get('datasources') as UntypedFormArray;
             datasourcesFormArray.clear();
             if (config.datasources) {
               config.datasources.forEach((datasource) => {
@@ -466,24 +495,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
               targetDeviceAliasId
             }, {emitEvent: false});
           } else if (this.widgetType === widgetType.alarm) {
-            let alarmStatusList: AlarmSearchStatus[] = [];
-            if (isDefined(config.alarmStatusList) && config.alarmStatusList.length) {
-              alarmStatusList = config.alarmStatusList;
-            } else if (isDefined(config.alarmSearchStatus) && config.alarmSearchStatus !== AlarmSearchStatus.ANY) {
-              alarmStatusList = [config.alarmSearchStatus];
-            }
             this.dataSettings.patchValue(
-              { alarmStatusList }, {emitEvent: false}
-            );
-            this.dataSettings.patchValue(
-              { alarmSeverityList: isDefined(config.alarmSeverityList) ? config.alarmSeverityList : [] }, {emitEvent: false}
-            );
-            this.dataSettings.patchValue(
-              { alarmTypeList: isDefined(config.alarmTypeList) ? config.alarmTypeList : [] }, {emitEvent: false}
-            );
-            this.dataSettings.patchValue(
-              { searchPropagatedAlarms: isDefined(config.searchPropagatedAlarms) ?
-                  config.searchPropagatedAlarms : true }, {emitEvent: false}
+              { alarmFilterConfig: isDefined(config.alarmFilterConfig) ?
+                  config.alarmFilterConfig : { statusList: [AlarmSearchStatus.ACTIVE], searchPropagatedAlarms: true } }, {emitEvent: false}
             );
             this.alarmSourceSettings.patchValue(
               config.alarmSource, {emitEvent: false}
@@ -502,7 +516,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           this.layoutSettings.patchValue(
             {
               mobileOrder: layout.mobileOrder,
-              mobileHeight: layout.mobileHeight
+              mobileHeight: layout.mobileHeight,
+              mobileHide: layout.mobileHide,
+              desktopHide: layout.desktopHide
             },
             {emitEvent: false}
           );
@@ -510,7 +526,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           this.layoutSettings.patchValue(
             {
               mobileOrder: null,
-              mobileHeight: null
+              mobileHeight: null,
+              mobileHide: false,
+              desktopHide: false
             },
             {emitEvent: false}
           );
@@ -520,9 +538,17 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     }
   }
 
-  private buildDatasourceForm(datasource?: Datasource): FormGroup {
-    let dataKeysRequired = !this.modelValue.typeParameters || !this.modelValue.typeParameters.dataKeysOptional
-      || datasource?.type === DatasourceType.entityCount;
+  public dataKeysOptional(type?: DatasourceType): boolean {
+    if (this.widgetType === widgetType.timeseries && this.modelValue?.typeParameters?.hasAdditionalLatestDataKeys) {
+      return true;
+    } else {
+      return this.modelValue.typeParameters && this.modelValue.typeParameters.dataKeysOptional
+        && type !== DatasourceType.entityCount && type !== DatasourceType.alarmCount;
+    }
+  }
+
+  private buildDatasourceForm(datasource?: Datasource): UntypedFormGroup {
+    const dataKeysRequired = !this.dataKeysOptional(datasource?.type);
     const datasourceFormGroup = this.fb.group(
       {
         type: [datasource ? datasource.type : null, [Validators.required]],
@@ -531,16 +557,20 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           datasource && (datasource.type === DatasourceType.entity ||
                          datasource.type === DatasourceType.entityCount) ? [Validators.required] : []],
         filterId: [datasource ? datasource.filterId : null, []],
-        dataKeys: [datasource ? datasource.dataKeys : null, dataKeysRequired ? [Validators.required] : []]
+        dataKeys: [datasource ? datasource.dataKeys : null, dataKeysRequired ? [Validators.required] : []],
+        alarmFilterConfig: [datasource && datasource.alarmFilterConfig ?
+          datasource.alarmFilterConfig : { statusList: [AlarmSearchStatus.ACTIVE] }]
       }
     );
+    if (this.widgetType === widgetType.timeseries && this.modelValue?.typeParameters?.hasAdditionalLatestDataKeys) {
+      datasourceFormGroup.addControl('latestDataKeys', this.fb.control(datasource ? datasource.latestDataKeys : null));
+    }
     datasourceFormGroup.get('type').valueChanges.subscribe((type: DatasourceType) => {
       datasourceFormGroup.get('entityAliasId').setValidators(
         (type === DatasourceType.entity || type === DatasourceType.entityCount) ? [Validators.required] : []
       );
-      dataKeysRequired = !this.modelValue.typeParameters || !this.modelValue.typeParameters.dataKeysOptional
-        || type === DatasourceType.entityCount;
-      datasourceFormGroup.get('dataKeys').setValidators(dataKeysRequired ? [Validators.required] : []);
+      const newDataKeysRequired = !this.dataKeysOptional(type);
+      datasourceFormGroup.get('dataKeys').setValidators(newDataKeysRequired ? [Validators.required] : []);
       datasourceFormGroup.get('entityAliasId').updateValueAndValidity();
       datasourceFormGroup.get('dataKeys').updateValueAndValidity();
     });
@@ -558,8 +588,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       widgetSettingsFormData.schema = deepClone(emptySettingsSchema);
       widgetSettingsFormData.form = deepClone(defaultSettingsForm);
       widgetSettingsFormData.groupInfoes = deepClone(emptySettingsGroupInfoes);
-      widgetSettingsFormData.model = {};
+      widgetSettingsFormData.model = settings || {};
     }
+    widgetSettingsFormData.settingsDirective = this.modelValue.settingsDirective;
     this.advancedSettings.patchValue({ settings: widgetSettingsFormData }, {emitEvent: false});
   }
 
@@ -617,7 +648,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
   private updateAdvancedSettings() {
     if (this.modelValue) {
       if (this.modelValue.config) {
-        const settings = this.advancedSettings.get('settings').value.model;
+        const settings = this.advancedSettings.get('settings').value?.model;
         this.modelValue.config.settings = settings;
       }
       this.propagateChange(this.modelValue);
@@ -634,53 +665,34 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     }
   }
 
-  public alarmTypeList(): string[] {
-    return this.dataSettings.get('alarmTypeList').value;
-  }
-
-  public removeAlarmType(type: string): void {
-    const types: string[] = this.dataSettings.get('alarmTypeList').value;
-    const index = types.indexOf(type);
-    if (index >= 0) {
-      types.splice(index, 1);
-      this.dataSettings.get('alarmTypeList').setValue(types);
-      this.dataSettings.get('alarmTypeList').markAsDirty();
-    }
-  }
-
-  public addAlarmType(event: MatChipInputEvent): void {
-    const input = event.input;
-    const value = event.value;
-
-    const types: string[] = this.dataSettings.get('alarmTypeList').value;
-
-    if ((value || '').trim()) {
-      types.push(value.trim());
-      this.dataSettings.get('alarmTypeList').setValue(types);
-      this.dataSettings.get('alarmTypeList').markAsDirty();
-    }
-
-    if (input) {
-      input.value = '';
-    }
-  }
-
   public displayAdvanced(): boolean {
-    return !!this.modelValue && !!this.modelValue.settingsSchema && !!this.modelValue.settingsSchema.schema;
+    return !!this.modelValue && (!!this.modelValue.settingsSchema && !!this.modelValue.settingsSchema.schema ||
+        !!this.modelValue.settingsDirective && !!this.modelValue.settingsDirective.length);
   }
 
-  public dndDatasourceMoved(index: number) {
-    this.datasourcesFormArray().removeAt(index);
-  }
-
-  public onDatasourceDrop(event: DndDropEvent) {
-    let index = event.index;
-    if (isUndefined(index)) {
-      index = this.datasourcesFormArray().length;
+  public displayTimewindowConfig(): boolean {
+    if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm) {
+      return true;
+    } else if (this.widgetType === widgetType.latest) {
+      const datasources = this.dataSettings.get('datasources').value;
+      return datasourcesHasAggregation(datasources);
     }
-    this.datasourcesFormArray().insert(index,
-      this.buildDatasourceForm(event.data)
-    );
+  }
+
+  public onlyHistoryTimewindow(): boolean {
+    if (this.widgetType === widgetType.latest) {
+      const datasources = this.dataSettings.get('datasources').value;
+      return datasourcesHasOnlyComparisonAggregation(datasources);
+    } else {
+      return false;
+    }
+  }
+
+  public onDatasourceDrop(event: CdkDragDrop<string[]>) {
+    const datasourcesFormArray = this.datasourcesFormArray();
+    const datasourceForm = datasourcesFormArray.at(event.previousIndex);
+    datasourcesFormArray.removeAt(event.previousIndex);
+    datasourcesFormArray.insert(event.currentIndex, datasourceForm);
   }
 
   public removeDatasource(index: number) {
@@ -691,16 +703,19 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     let newDatasource: Datasource;
     if (this.functionsOnly) {
       newDatasource = deepClone(this.utils.getDefaultDatasource(this.modelValue.dataKeySettingsSchema.schema));
-      newDatasource.dataKeys = [this.generateDataKey('Sin', DataKeyType.function)];
+      newDatasource.dataKeys = [this.generateDataKey('Sin', DataKeyType.function, this.modelValue.dataKeySettingsSchema)];
     } else {
       newDatasource = { type: DatasourceType.entity,
         dataKeys: []
       };
     }
+    if (this.modelValue?.typeParameters?.hasAdditionalLatestDataKeys) {
+      newDatasource.latestDataKeys = [];
+    }
     this.datasourcesFormArray().push(this.buildDatasourceForm(newDatasource));
   }
 
-  public generateDataKey(chip: any, type: DataKeyType): DataKey {
+  public generateDataKey(chip: any, type: DataKeyType, datakeySettingsSchema: JsonSettingsSchema): DataKey {
     if (isObject(chip)) {
       (chip as DataKey)._hash = Math.random();
       return chip;
@@ -712,7 +727,8 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           label = this.translate.instant(keyField.name);
         }
       }
-      label = this.genNextLabel(label);
+      const datasources = this.widgetType === widgetType.alarm ? [this.modelValue.config.alarmSource] : this.modelValue.config.datasources;
+      label = genNextLabel(label, datasources);
       const result: DataKey = {
         name: chip,
         type,
@@ -730,35 +746,11 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       } else if (type === DataKeyType.count) {
         result.name = 'count';
       }
-      if (isDefined(this.modelValue.dataKeySettingsSchema.schema)) {
-        result.settings = this.utils.generateObjectFromJsonSchema(this.modelValue.dataKeySettingsSchema.schema);
+      if (datakeySettingsSchema && isDefined(datakeySettingsSchema.schema)) {
+        result.settings = this.utils.generateObjectFromJsonSchema(datakeySettingsSchema.schema);
       }
       return result;
     }
-  }
-
-  private genNextLabel(name: string): string {
-    let label = name;
-    let i = 1;
-    let matches = false;
-    const datasources = this.widgetType === widgetType.alarm ? [this.modelValue.config.alarmSource] : this.modelValue.config.datasources;
-    if (datasources) {
-      do {
-        matches = false;
-        datasources.forEach((datasource) => {
-          if (datasource && datasource.dataKeys) {
-            datasource.dataKeys.forEach((dataKey) => {
-              if (dataKey.label === label) {
-                i++;
-                label = name + ' ' + i;
-                matches = true;
-              }
-            });
-          }
-        });
-      } while (matches);
-    }
-    return label;
   }
 
   private genNextColor(): string {
@@ -766,8 +758,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     const datasources = this.widgetType === widgetType.alarm ? [this.modelValue.config.alarmSource] : this.modelValue.config.datasources;
     if (datasources) {
       datasources.forEach((datasource) => {
-        if (datasource && datasource.dataKeys) {
-          i += datasource.dataKeys.length;
+        if (datasource && (datasource.dataKeys || datasource.latestDataKeys)) {
+          i += ((datasource.dataKeys ? datasource.dataKeys.length : 0) +
+            (datasource.latestDataKeys ? datasource.latestDataKeys.length : 0));
         }
       });
     }
@@ -783,14 +776,14 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       data: {
         isAdd: true,
         allowedEntityTypes,
-        entityAliases: this.entityAliases,
+        entityAliases: this.dashboard.configuration.entityAliases,
         alias: singleEntityAlias
       }
     }).afterClosed().pipe(
       tap((entityAlias) => {
         if (entityAlias) {
-          this.entityAliases[entityAlias.id] = entityAlias;
-          this.aliasController.updateEntityAliases(this.entityAliases);
+          this.dashboard.configuration.entityAliases[entityAlias.id] = entityAlias;
+          this.aliasController.updateEntityAliases(this.dashboard.configuration.entityAliases);
         }
       })
     );
@@ -804,14 +797,14 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
       panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
       data: {
         isAdd: true,
-        filters: this.filters,
+        filters: this.dashboard.configuration.filters,
         filter: singleFilter
       }
     }).afterClosed().pipe(
       tap((result) => {
         if (result) {
-          this.filters[result.id] = result;
-          this.aliasController.updateFilters(this.filters);
+          this.dashboard.configuration.filters[result.id] = result;
+          this.aliasController.updateFilters(this.dashboard.configuration.filters);
         }
       })
     );
@@ -833,7 +826,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
   }
 
   private fetchDashboardStates(query: string): Array<string> {
-    const stateIds = Object.keys(this.dashboardStates);
+    const stateIds = Object.keys(this.dashboard.configuration.states);
     const result = query ? stateIds.filter(this.createFilterForDashboardState(query)) : stateIds;
     if (result && result.length) {
       return result;
@@ -847,7 +840,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     return stateId => stateId.toLowerCase().indexOf(lowercaseQuery) === 0;
   }
 
-  public validate(c: FormControl) {
+  public validate(c: UntypedFormControl) {
+    this.timeseriesKeyError = false;
+    this.datasourceError = [];
     if (!this.dataSettings.valid) {
       return {
         dataSettings: {
@@ -866,7 +861,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           valid: false
         }
       };
-    } else if (!this.advancedSettings.valid) {
+    } else if (!this.advancedSettings.valid || (this.displayAdvanced() && !this.modelValue.config.settings)) {
       return {
         advancedSettings: {
           valid: false
@@ -875,7 +870,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
     } else if (this.modelValue) {
       const config = this.modelValue.config;
       if (this.widgetType === widgetType.rpc && this.modelValue.isDataEnabled) {
-        if (!config.targetDeviceAliasIds || !config.targetDeviceAliasIds.length) {
+        if (!this.widgetEditMode && (!config.targetDeviceAliasIds || !config.targetDeviceAliasIds.length)) {
           return {
             targetDeviceAliasIds: {
               valid: false
@@ -891,16 +886,45 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, Cont
           };
         }
       } else if (this.widgetType !== widgetType.static && this.modelValue.isDataEnabled) {
-        if (!config.datasources || !config.datasources.length) {
+        if (!this.modelValue.typeParameters.datasourcesOptional && (!config.datasources || !config.datasources.length)) {
           return {
             datasources: {
               valid: false
             }
           };
         }
+        if (this.widgetType === widgetType.timeseries && this.modelValue?.typeParameters?.hasAdditionalLatestDataKeys) {
+          let valid = config.datasources.filter(datasource => datasource?.dataKeys?.length).length > 0;
+          if (!valid) {
+            this.timeseriesKeyError = true;
+            return {
+              timeseriesDataKeys: {
+                valid: false
+              }
+            };
+          } else {
+            const emptyDatasources = config.datasources.filter(datasource => !datasource?.dataKeys?.length &&
+              !datasource?.latestDataKeys?.length);
+            valid = emptyDatasources.length === 0;
+            if (!valid) {
+              for (const emptyDatasource of emptyDatasources) {
+                const i = config.datasources.indexOf(emptyDatasource);
+                this.datasourceError[i] = 'At least one data key should be specified';
+              }
+              return {
+                dataKeys: {
+                  valid: false
+                }
+              };
+            }
+          }
+        }
       }
     }
     return null;
   }
 
+  public extensionPanelIsOpen(value) {
+    this.openExtensionPanel = value;
+  }
 }

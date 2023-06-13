@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -54,6 +54,9 @@ import { PageData } from '@shared/models/page/page-data';
 import { TranslateService } from '@ngx-translate/core';
 import { AlarmDataService } from '@core/api/alarm-data.service';
 import { IDashboardController } from '@home/components/dashboard-page/dashboard-page.models';
+import { PopoverPlacement } from '@shared/components/popover.models';
+import { PersistentRpc } from '@shared/models/rpc.models';
+import { EventEmitter } from '@angular/core';
 
 export interface TimewindowFunctions {
   onUpdateTimewindow: (startTimeMs: number, endTimeMs: number, interval?: number) => void;
@@ -69,8 +72,11 @@ export interface WidgetSubscriptionApi {
 }
 
 export interface RpcApi {
-  sendOneWayCommand: (method: string, params?: any, timeout?: number) => Observable<any>;
-  sendTwoWayCommand: (method: string, params?: any, timeout?: number) => Observable<any>;
+  sendOneWayCommand: (method: string, params?: any, timeout?: number, persistent?: boolean,
+                      persistentPollingInterval?: number, retries?: number, additionalInfo?: any, requestUUID?: string) => Observable<any>;
+  sendTwoWayCommand: (method: string, params?: any, timeout?: number, persistent?: boolean,
+                      persistentPollingInterval?: number, retries?: number, additionalInfo?: any, requestUUID?: string) => Observable<any>;
+  completedCommand: () => void;
 }
 
 export interface IWidgetUtils {
@@ -84,6 +90,12 @@ export interface WidgetActionsApi {
                        entityId?: EntityId, entityName?: string, additionalParams?: any, entityLabel?: string) => void;
   elementClick: ($event: Event) => void;
   getActiveEntityInfo: () => SubscriptionEntityInfo;
+  openDashboardStateInSeparateDialog: (targetDashboardStateId: string, params?: StateParams, dialogTitle?: string,
+                                       hideDashboardToolbar?: boolean, dialogWidth?: number, dialogHeight?: number) => void;
+  openDashboardStateInPopover: ($event: Event, targetDashboardStateId: string, params?: StateParams,
+                                hideDashboardToolbar?: boolean, preferredPlacement?: PopoverPlacement,
+                                hideOnClickOutside?: boolean, popoverWidth?: string,
+                                popoverHeight?: string, popoverStyle?: { [klass: string]: any }) => void;
 }
 
 export interface AliasInfo {
@@ -108,7 +120,7 @@ export interface IAliasController {
   getEntityAliasId(aliasName: string): string;
   getInstantAliasInfo(aliasId: string): AliasInfo;
   resolveSingleEntityInfo(aliasId: string): Observable<EntityInfo>;
-  resolveDatasources(datasources: Array<Datasource>, singleEntity?: boolean): Observable<Array<Datasource>>;
+  resolveDatasources(datasources: Array<Datasource>, singleEntity?: boolean, pageSize?: number): Observable<Array<Datasource>>;
   resolveAlarmSource(alarmSource: Datasource): Observable<Datasource>;
   getEntityAliases(): EntityAliases;
   getFilters(): Filters;
@@ -140,6 +152,7 @@ export type StateControllerHolder = () => IStateController;
 export interface IStateController {
   dashboardCtrl: IDashboardController;
   getStateParams(): StateParams;
+  stateChanged(): Observable<string>;
   getStateParamsByStateId(stateId: string): StateParams;
   openState(id: string, params?: StateParams, openRightLayout?: boolean): void;
   updateState(id?: string, params?: StateParams, openRightLayout?: boolean): void;
@@ -147,11 +160,12 @@ export interface IStateController {
   openRightLayout(): void;
   preserveState(): void;
   cleanupPreservedStates(): void;
-  navigatePrevState(index: number): void;
+  navigatePrevState(index: number, params?: StateParams): void;
   getStateId(): string;
   getStateIndex(): number;
   getStateIdAtIndex(index: number): string;
   getEntityId(entityParamName: string): EntityId;
+  getCurrentStateName(): string;
 }
 
 export interface SubscriptionInfo {
@@ -171,6 +185,7 @@ export interface SubscriptionInfo {
   deviceName?: string;
   deviceNamePrefix?: string;
   deviceIds?: Array<string>;
+  pageSize?: number;
 }
 
 export class WidgetSubscriptionContext {
@@ -206,7 +221,9 @@ export interface SubscriptionMessage {
 
 export interface WidgetSubscriptionCallbacks {
   onDataUpdated?: (subscription: IWidgetSubscription, detectChanges: boolean) => void;
+  onLatestDataUpdated?: (subscription: IWidgetSubscription, detectChanges: boolean) => void;
   onDataUpdateError?: (subscription: IWidgetSubscription, e: any) => void;
+  onLatestDataUpdateError?: (subscription: IWidgetSubscription, e: any) => void;
   onSubscriptionMessage?: (subscription: IWidgetSubscription, message: SubscriptionMessage) => void;
   onInitialPageDataChanged?: (subscription: IWidgetSubscription, nextPageData: PageData<EntityData>) => void;
   forceReInit?: () => void;
@@ -224,8 +241,10 @@ export interface WidgetSubscriptionOptions {
   stateData?: boolean;
   alarmSource?: Datasource;
   datasources?: Array<Datasource>;
+  datasourcesOptional?: boolean;
   hasDataPageLink?: boolean;
   singleEntity?: boolean;
+  pageSize?: number;
   warnOnPageDataOverflow?: boolean;
   ignoreDataUpdateOnIntervalTick?: boolean;
   targetDeviceAliasIds?: Array<string>;
@@ -234,9 +253,11 @@ export interface WidgetSubscriptionOptions {
   displayTimewindow?: boolean;
   timeWindowConfig?: Timewindow;
   dashboardTimewindow?: Timewindow;
+  onTimewindowChangeFunction?: (timewindow: Timewindow) => Timewindow;
   legendConfig?: LegendConfig;
   comparisonEnabled?: boolean;
   timeForComparison?: moment_.unitOfTime.DurationConstructor;
+  comparisonCustomIntervalValue?: number;
   decimals?: number;
   units?: string;
   callbacks?: WidgetSubscriptionCallbacks;
@@ -267,11 +288,16 @@ export interface IWidgetSubscription {
   dataPages?: PageData<Array<DatasourceData>>[];
   datasources?: Array<Datasource>;
   data?: Array<DatasourceData>;
+  latestData?: Array<DatasourceData>;
   hiddenData?: Array<{data: DataSet}>;
   timeWindowConfig?: Timewindow;
   timeWindow?: WidgetTimewindow;
+  onTimewindowChangeFunction?: (timewindow: Timewindow) => Timewindow;
+  widgetTimewindowChanged$: Observable<WidgetTimewindow>;
   comparisonEnabled?: boolean;
   comparisonTimeWindow?: WidgetTimewindow;
+
+  persistentRequests?: PageData<PersistentRpc>;
 
   alarms?: PageData<AlarmData>;
   alarmSource?: Datasource;
@@ -298,8 +324,10 @@ export interface IWidgetSubscription {
   onResetTimewindow(): void;
   updateTimewindowConfig(newTimewindow: Timewindow): void;
 
-  sendOneWayCommand(method: string, params?: any, timeout?: number): Observable<any>;
-  sendTwoWayCommand(method: string, params?: any, timeout?: number): Observable<any>;
+  sendOneWayCommand(method: string, params?: any, timeout?: number, persistent?: boolean,
+                    persistentPollingInterval?: number, retries?: number, additionalInfo?: any, requestUUID?: string): Observable<any>;
+  sendTwoWayCommand(method: string, params?: any, timeout?: number, persistent?: boolean,
+                    persistentPollingInterval?: number, retries?: number, additionalInfo?: any, requestUUID?: string): Observable<any>;
   clearRpcError(): void;
 
   subscribe(): void;
@@ -310,6 +338,8 @@ export interface IWidgetSubscription {
   subscribeForPaginatedData(datasourceIndex: number,
                             pageLink: EntityDataPageLink,
                             keyFilters: KeyFilter[]): Observable<any>;
+
+  paginatedDataSubscriptionUpdated: EventEmitter<void>;
 
   subscribeForAlarms(pageLink: AlarmDataPageLink,
                      keyFilters: KeyFilter[]): void;

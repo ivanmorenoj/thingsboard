@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,10 @@
  */
 package org.thingsboard.server.service.security.auth.jwt;
 
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.CredentialsExpiredException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.core.Authentication;
@@ -36,6 +37,7 @@ import org.thingsboard.server.common.data.security.UserCredentials;
 import org.thingsboard.server.dao.customer.CustomerService;
 import org.thingsboard.server.dao.user.UserService;
 import org.thingsboard.server.service.security.auth.RefreshAuthenticationToken;
+import org.thingsboard.server.service.security.auth.TokenOutdatingService;
 import org.thingsboard.server.service.security.model.SecurityUser;
 import org.thingsboard.server.service.security.model.UserPrincipal;
 import org.thingsboard.server.service.security.model.token.JwtTokenFactory;
@@ -44,18 +46,12 @@ import org.thingsboard.server.service.security.model.token.RawAccessJwtToken;
 import java.util.UUID;
 
 @Component
+@RequiredArgsConstructor
 public class RefreshTokenAuthenticationProvider implements AuthenticationProvider {
-
     private final JwtTokenFactory tokenFactory;
     private final UserService userService;
     private final CustomerService customerService;
-
-    @Autowired
-    public RefreshTokenAuthenticationProvider(final UserService userService, final CustomerService customerService, final JwtTokenFactory tokenFactory) {
-        this.userService = userService;
-        this.customerService = customerService;
-        this.tokenFactory = tokenFactory;
-    }
+    private final TokenOutdatingService tokenOutdatingService;
 
     @Override
     public Authentication authenticate(Authentication authentication) throws AuthenticationException {
@@ -63,17 +59,23 @@ public class RefreshTokenAuthenticationProvider implements AuthenticationProvide
         RawAccessJwtToken rawAccessToken = (RawAccessJwtToken) authentication.getCredentials();
         SecurityUser unsafeUser = tokenFactory.parseRefreshToken(rawAccessToken);
         UserPrincipal principal = unsafeUser.getUserPrincipal();
+
         SecurityUser securityUser;
         if (principal.getType() == UserPrincipal.Type.USER_NAME) {
             securityUser = authenticateByUserId(unsafeUser.getId());
         } else {
             securityUser = authenticateByPublicId(principal.getValue());
         }
+        securityUser.setSessionId(unsafeUser.getSessionId());
+        if (tokenOutdatingService.isOutdated(rawAccessToken, securityUser.getId())) {
+            throw new CredentialsExpiredException("Token is outdated");
+        }
+
         return new RefreshAuthenticationToken(securityUser);
     }
 
     private SecurityUser authenticateByUserId(UserId userId) {
-        TenantId systemId = new TenantId(EntityId.NULL_UUID);
+        TenantId systemId = TenantId.SYS_TENANT_ID;
         User user = userService.findUserById(systemId, userId);
         if (user == null) {
             throw new UsernameNotFoundException("User not found by refresh token");
@@ -91,14 +93,13 @@ public class RefreshTokenAuthenticationProvider implements AuthenticationProvide
         if (user.getAuthority() == null) throw new InsufficientAuthenticationException("User has no authority assigned");
 
         UserPrincipal userPrincipal = new UserPrincipal(UserPrincipal.Type.USER_NAME, user.getEmail());
-
         SecurityUser securityUser = new SecurityUser(user, userCredentials.isEnabled(), userPrincipal);
 
         return securityUser;
     }
 
     private SecurityUser authenticateByPublicId(String publicId) {
-        TenantId systemId = new TenantId(EntityId.NULL_UUID);
+        TenantId systemId = TenantId.SYS_TENANT_ID;
         CustomerId customerId;
         try {
             customerId = new CustomerId(UUID.fromString(publicId));

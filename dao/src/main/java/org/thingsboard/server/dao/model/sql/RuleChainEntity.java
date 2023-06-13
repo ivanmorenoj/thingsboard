@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.rule.RuleChain;
+import org.thingsboard.server.common.data.rule.RuleChainType;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
@@ -32,6 +33,8 @@ import org.thingsboard.server.dao.util.mapping.JsonStringType;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
 import javax.persistence.Table;
 import java.util.UUID;
 
@@ -47,6 +50,10 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
 
     @Column(name = ModelConstants.RULE_CHAIN_NAME_PROPERTY)
     private String name;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = ModelConstants.RULE_CHAIN_TYPE_PROPERTY)
+    private RuleChainType type;
 
     @Column(name = ModelConstants.SEARCH_TEXT_PROPERTY)
     private String searchText;
@@ -68,6 +75,9 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
     @Column(name = ModelConstants.ADDITIONAL_INFO_PROPERTY)
     private JsonNode additionalInfo;
 
+    @Column(name = ModelConstants.EXTERNAL_ID_PROPERTY)
+    private UUID externalId;
+
     public RuleChainEntity() {
     }
 
@@ -78,6 +88,7 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
         this.setCreatedTime(ruleChain.getCreatedTime());
         this.tenantId = DaoUtil.getId(ruleChain.getTenantId());
         this.name = ruleChain.getName();
+        this.type = ruleChain.getType();
         this.searchText = ruleChain.getName();
         if (ruleChain.getFirstRuleNodeId() != null) {
             this.firstRuleNodeId = ruleChain.getFirstRuleNodeId().getId();
@@ -86,6 +97,9 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
         this.debugMode = ruleChain.isDebugMode();
         this.configuration = ruleChain.getConfiguration();
         this.additionalInfo = ruleChain.getAdditionalInfo();
+        if (ruleChain.getExternalId() != null) {
+            this.externalId = ruleChain.getExternalId().getId();
+        }
     }
 
     @Override
@@ -102,8 +116,9 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
     public RuleChain toData() {
         RuleChain ruleChain = new RuleChain(new RuleChainId(this.getUuid()));
         ruleChain.setCreatedTime(createdTime);
-        ruleChain.setTenantId(new TenantId(tenantId));
+        ruleChain.setTenantId(TenantId.fromUUID(tenantId));
         ruleChain.setName(name);
+        ruleChain.setType(type);
         if (firstRuleNodeId != null) {
             ruleChain.setFirstRuleNodeId(new RuleNodeId(firstRuleNodeId));
         }
@@ -111,6 +126,9 @@ public class RuleChainEntity extends BaseSqlEntity<RuleChain> implements SearchT
         ruleChain.setDebugMode(debugMode);
         ruleChain.setConfiguration(configuration);
         ruleChain.setAdditionalInfo(additionalInfo);
+        if (externalId != null) {
+            ruleChain.setExternalId(new RuleChainId(externalId));
+        }
         return ruleChain;
     }
 }

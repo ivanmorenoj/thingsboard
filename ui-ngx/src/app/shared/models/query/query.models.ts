@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import { TranslateService } from '@ngx-translate/core';
 import { AlarmInfo, AlarmSearchStatus, AlarmSeverity } from '../alarm.models';
 import { Filter } from '@material-ui/icons';
 import { DatePipe } from '@angular/common';
+import { UserId } from '../id/user-id';
 
 export enum EntityKeyType {
   ATTRIBUTE = 'ATTRIBUTE',
@@ -202,6 +203,17 @@ export function createDefaultFilterPredicate(valueType: EntityKeyValueType, comp
   return predicate;
 }
 
+export function getDynamicSourcesForAllowUser(allow: boolean): DynamicValueSourceType[] {
+  const dynamicValueSourceTypes = [DynamicValueSourceType.CURRENT_TENANT,
+    DynamicValueSourceType.CURRENT_CUSTOMER];
+  if (allow) {
+    dynamicValueSourceTypes.push(DynamicValueSourceType.CURRENT_USER);
+  } else {
+    dynamicValueSourceTypes.push(DynamicValueSourceType.CURRENT_DEVICE);
+  }
+  return dynamicValueSourceTypes;
+}
+
 export enum FilterPredicateType {
   STRING = 'STRING',
   NUMERIC = 'NUMERIC',
@@ -215,7 +227,9 @@ export enum StringOperation {
   STARTS_WITH = 'STARTS_WITH',
   ENDS_WITH = 'ENDS_WITH',
   CONTAINS = 'CONTAINS',
-  NOT_CONTAINS = 'NOT_CONTAINS'
+  NOT_CONTAINS = 'NOT_CONTAINS',
+  IN = 'IN',
+  NOT_IN = 'NOT_IN'
 }
 
 export const stringOperationTranslationMap = new Map<StringOperation, string>(
@@ -225,7 +239,9 @@ export const stringOperationTranslationMap = new Map<StringOperation, string>(
     [StringOperation.STARTS_WITH, 'filter.operation.starts-with'],
     [StringOperation.ENDS_WITH, 'filter.operation.ends-with'],
     [StringOperation.CONTAINS, 'filter.operation.contains'],
-    [StringOperation.NOT_CONTAINS, 'filter.operation.not-contains']
+    [StringOperation.NOT_CONTAINS, 'filter.operation.not-contains'],
+    [StringOperation.IN, 'filter.operation.in'],
+    [StringOperation.NOT_IN, 'filter.operation.not-in']
   ]
 );
 
@@ -288,6 +304,10 @@ export const dynamicValueSourceTypeTranslationMap = new Map<DynamicValueSourceTy
     [DynamicValueSourceType.CURRENT_DEVICE, 'filter.current-device']
   ]
 );
+
+export const inheritModeForDynamicValueSourceType = [
+  DynamicValueSourceType.CURRENT_CUSTOMER,
+  DynamicValueSourceType.CURRENT_DEVICE];
 
 export interface DynamicValue<T> {
   sourceType: DynamicValueSourceType;
@@ -686,7 +706,7 @@ export interface EntityDataPageLink {
   dynamic?: boolean;
 }
 
-export interface AlarmDataPageLink extends EntityDataPageLink {
+export interface AlarmFilter {
   startTs?: number;
   endTs?: number;
   timeWindow?: number;
@@ -694,7 +714,16 @@ export interface AlarmDataPageLink extends EntityDataPageLink {
   statusList?: Array<AlarmSearchStatus>;
   severityList?: Array<AlarmSeverity>;
   searchPropagatedAlarms?: boolean;
+  assigneeId?: UserId;
 }
+
+export interface AlarmFilterConfig extends AlarmFilter {
+  assignedToCurrentUser?: boolean;
+}
+
+export type AlarmCountQuery = EntityCountQuery & AlarmFilter;
+
+export type AlarmDataPageLink = EntityDataPageLink & AlarmFilter;
 
 export function entityDataPageLinkSortDirection(pageLink: EntityDataPageLink): SortDirection {
   if (pageLink.sortOrder) {
@@ -719,7 +748,6 @@ export function createDefaultEntityDataPageLink(pageSize: number): EntityDataPag
 }
 
 export const singleEntityDataPageLink: EntityDataPageLink = createDefaultEntityDataPageLink(1);
-export const defaultEntityDataPageLink: EntityDataPageLink = createDefaultEntityDataPageLink(1024);
 
 export interface EntityCountQuery {
   entityFilter: EntityFilter;
@@ -742,12 +770,19 @@ export interface AlarmDataQuery extends AbstractDataQuery<AlarmDataPageLink> {
 export interface TsValue {
   ts: number;
   value: string;
+  count?: number;
+}
+
+export interface ComparisonTsValue {
+  current?: TsValue;
+  previous?: TsValue;
 }
 
 export interface EntityData {
   entityId: EntityId;
   latest: {[entityKeyType: string]: {[key: string]: TsValue}};
   timeseries: {[key: string]: Array<TsValue>};
+  aggLatest?: {[id: number]: ComparisonTsValue};
 }
 
 export interface AlarmData extends AlarmInfo {
@@ -818,13 +853,16 @@ export function updateDatasourceFromEntityInfo(datasource: Datasource, entity: E
   };
   datasource.entityId = entity.id;
   datasource.entityType = entity.entityType;
-  if (datasource.type === DatasourceType.entity || datasource.type === DatasourceType.entityCount) {
-    datasource.entityName = entity.name;
-    datasource.entityLabel = entity.label;
-    datasource.name = entity.name;
-    datasource.entityDescription = entity.entityDescription;
-    datasource.entity.label = entity.label;
-    datasource.entity.name = entity.name;
+  if (datasource.type === DatasourceType.entity || datasource.type === DatasourceType.entityCount
+    || datasource.type === DatasourceType.alarmCount) {
+    if (datasource.type === DatasourceType.entity) {
+      datasource.entityName = entity.name;
+      datasource.entityLabel = entity.label;
+      datasource.name = entity.name;
+      datasource.entityDescription = entity.entityDescription;
+      datasource.entity.label = entity.label;
+      datasource.entity.name = entity.name;
+    }
     if (createFilter) {
       datasource.entityFilter = {
         type: AliasFilterType.singleEntity,

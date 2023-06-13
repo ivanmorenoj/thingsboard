@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -18,12 +18,12 @@ import { Injectable, NgZone } from '@angular/core';
 import { JwtHelperService } from '@auth0/angular-jwt';
 import { HttpClient } from '@angular/common/http';
 
-import { forkJoin, Observable, of, ReplaySubject, throwError } from 'rxjs';
+import { Observable, of, ReplaySubject, throwError } from 'rxjs';
 import { catchError, map, mergeMap, tap } from 'rxjs/operators';
 
 import { LoginRequest, LoginResponse, PublicLoginRequest } from '@shared/models/login.models';
 import { ActivatedRoute, Router, UrlTree } from '@angular/router';
-import { defaultHttpOptions } from '../http/http-utils';
+import { defaultHttpOptions, defaultHttpOptionsFromConfig, RequestConfig } from '../http/http-utils';
 import { UserService } from '../http/user.service';
 import { Store } from '@ngrx/store';
 import { AppState } from '../core.state';
@@ -31,20 +31,17 @@ import { ActionAuthAuthenticated, ActionAuthLoadUser, ActionAuthUnauthenticated 
 import { getCurrentAuthState, getCurrentAuthUser } from './auth.selectors';
 import { Authority } from '@shared/models/authority.enum';
 import { ActionSettingsChangeLanguage } from '@app/core/settings/settings.actions';
-import { AuthPayload, AuthState } from '@core/auth/auth.models';
+import { AuthPayload, AuthState, SysParams, SysParamsState } from '@core/auth/auth.models';
 import { TranslateService } from '@ngx-translate/core';
 import { AuthUser } from '@shared/models/user.model';
 import { TimeService } from '@core/services/time.service';
 import { UtilsService } from '@core/services/utils.service';
-import { DashboardService } from '@core/http/dashboard.service';
-import { PageLink } from '@shared/models/page/page-link';
-import { DashboardInfo } from '@shared/models/dashboard.models';
-import { PageData } from '@app/shared/models/page/page-data';
-import { AdminService } from '@core/http/admin.service';
-import { ActionNotificationShow } from '@core/notification/notification.actions';
 import { MatDialog, MatDialogConfig } from '@angular/material/dialog';
 import { AlertDialogComponent } from '@shared/components/dialog/alert-dialog.component';
-import { OAuth2ClientInfo } from '@shared/models/oauth2.models';
+import { OAuth2ClientInfo, PlatformType } from '@shared/models/oauth2.models';
+import { isMobileApp } from '@core/utils';
+import { TwoFactorAuthProviderType, TwoFaProviderInfo } from '@shared/models/two-factor-auth.models';
+import { UserPasswordPolicy } from '@shared/models/settings.models';
 
 @Injectable({
     providedIn: 'root'
@@ -60,8 +57,6 @@ export class AuthService {
     private route: ActivatedRoute,
     private zone: NgZone,
     private utils: UtilsService,
-    private dashboardService: DashboardService,
-    private adminService: AdminService,
     private translate: TranslateService,
     private dialog: MatDialog
   ) {
@@ -69,6 +64,7 @@ export class AuthService {
 
   redirectUrl: string;
   oauth2Clients: Array<OAuth2ClientInfo> = null;
+  twoFactorAuthProviders: Array<TwoFaProviderInfo> = null;
 
   private refreshTokenSubject: ReplaySubject<LoginResponse> = null;
   private jwtHelper = new JwtHelperService();
@@ -115,6 +111,19 @@ export class AuthService {
     return this.http.post<LoginResponse>('/api/auth/login', loginRequest, defaultHttpOptions()).pipe(
       tap((loginResponse: LoginResponse) => {
           this.setUserFromJwtToken(loginResponse.token, loginResponse.refreshToken, true);
+          if (loginResponse.scope === Authority.PRE_VERIFICATION_TOKEN) {
+            this.router.navigateByUrl(`login/mfa`);
+          }
+        }
+      ));
+  }
+
+  public checkTwoFaVerificationCode(providerType: TwoFactorAuthProviderType, verificationCode: number): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>
+    (`/api/auth/2fa/verification/check?providerType=${providerType}&verificationCode=${verificationCode}`,
+      null, defaultHttpOptions(false, true)).pipe(
+      tap((loginResponse: LoginResponse) => {
+          this.setUserFromJwtToken(loginResponse.token, loginResponse.refreshToken, true);
         }
       ));
   }
@@ -148,9 +157,16 @@ export class AuthService {
       ));
   }
 
-  public changePassword(currentPassword: string, newPassword: string) {
-    return this.http.post('/api/auth/changePassword',
-      {currentPassword, newPassword}, defaultHttpOptions());
+  public changePassword(currentPassword: string, newPassword: string, config?: RequestConfig) {
+    return this.http.post('/api/auth/changePassword', {currentPassword, newPassword}, defaultHttpOptionsFromConfig(config)).pipe(
+      tap((loginResponse: LoginResponse) => {
+          this.setUserFromJwtToken(loginResponse.token, loginResponse.refreshToken, false);
+        }
+      ));
+  }
+
+  public getUserPasswordPolicy() {
+    return this.http.get<UserPasswordPolicy>(`/api/noauth/userPasswordPolicy`, defaultHttpOptions());
   }
 
   public activateByEmailCode(emailCode: string): Observable<LoginResponse> {
@@ -172,18 +188,22 @@ export class AuthService {
       ));
   }
 
-  public logout(captureLastUrl: boolean = false) {
+  public logout(captureLastUrl: boolean = false, ignoreRequest = false) {
     if (captureLastUrl) {
       this.redirectUrl = this.router.url;
     }
-    this.http.post('/api/auth/logout', null, defaultHttpOptions(true, true))
-      .subscribe(() => {
-          this.clearJwtToken();
-        },
-        () => {
-          this.clearJwtToken();
-        }
-      );
+    if (!ignoreRequest) {
+      this.http.post('/api/auth/logout', null, defaultHttpOptions(true, true))
+        .subscribe(() => {
+            this.clearJwtToken();
+          },
+          () => {
+            this.clearJwtToken();
+          }
+        );
+    } else {
+      this.clearJwtToken();
+    }
   }
 
   private notifyUserLoaded(isUserLoaded: boolean) {
@@ -191,15 +211,18 @@ export class AuthService {
   }
 
   public gotoDefaultPlace(isAuthenticated: boolean) {
-    const authState = getCurrentAuthState(this.store);
-    const url = this.defaultUrl(isAuthenticated, authState);
-    this.zone.run(() => {
-      this.router.navigateByUrl(url);
-    });
+    if (!isMobileApp()) {
+      const authState = getCurrentAuthState(this.store);
+      const url = this.defaultUrl(isAuthenticated, authState);
+      this.zone.run(() => {
+        this.router.navigateByUrl(url);
+      });
+    }
   }
 
   public loadOAuth2Clients(): Observable<Array<OAuth2ClientInfo>> {
-    return this.http.post<Array<OAuth2ClientInfo>>(`/api/noauth/oauth2Clients`,
+    const url = '/api/noauth/oauth2Clients?platform=' + PlatformType.WEB;
+    return this.http.post<Array<OAuth2ClientInfo>>(url,
       null, defaultHttpOptions()).pipe(
       catchError(err => of([])),
       tap((OAuth2Clients) => {
@@ -208,11 +231,20 @@ export class AuthService {
     );
   }
 
-  private forceDefaultPlace(authState?: AuthState, path?: string, params?: any): boolean {
+  public getAvailableTwoFaLoginProviders(): Observable<Array<TwoFaProviderInfo>> {
+    return this.http.get<Array<TwoFaProviderInfo>>(`/api/auth/2fa/providers`, defaultHttpOptions()).pipe(
+      catchError(() => of([])),
+      tap((providers) => {
+        this.twoFactorAuthProviders = providers;
+      })
+    );
+  }
+
+  public forceDefaultPlace(authState?: AuthState, path?: string, params?: any): boolean {
     if (authState && authState.authUser) {
       if (authState.authUser.authority === Authority.TENANT_ADMIN || authState.authUser.authority === Authority.CUSTOMER_USER) {
         if ((this.userHasDefaultDashboard(authState) && authState.forceFullscreen) || authState.authUser.isPublic) {
-          if (path === 'profile') {
+          if (path === 'profile' || path === 'security') {
             if (this.userHasProfile(authState.authUser)) {
               return false;
             } else {
@@ -233,7 +265,9 @@ export class AuthService {
   public defaultUrl(isAuthenticated: boolean, authState?: AuthState, path?: string, params?: any): UrlTree {
     let result: UrlTree = null;
     if (isAuthenticated) {
-      if (!path || path === 'login' || this.forceDefaultPlace(authState, path, params)) {
+      if (authState.authUser.authority === Authority.PRE_VERIFICATION_TOKEN) {
+        result = this.router.parseUrl('login/mfa');
+      } else if (!path || path === 'login' || this.forceDefaultPlace(authState, path, params)) {
         if (this.redirectUrl) {
           const redirectUrl = this.redirectUrl;
           this.redirectUrl = null;
@@ -252,16 +286,6 @@ export class AuthService {
           } else if (authState.authUser.isPublic) {
             result = this.router.parseUrl(`dashboard/${authState.lastPublicDashboardId}`);
           }
-        } else if (authState.authUser.authority === Authority.SYS_ADMIN) {
-          this.adminService.checkUpdates().subscribe((updateMessage) => {
-            if (updateMessage && updateMessage.updateAvailable) {
-              this.store.dispatch(new ActionNotificationShow(
-                {message: updateMessage.message,
-                           type: 'info',
-                           verticalPosition: 'bottom',
-                           horizontalPosition: 'right'}));
-            }
-          });
         }
       }
     } else {
@@ -291,10 +315,11 @@ export class AuthService {
           })
         );
       } else if (accessToken) {
-        this.utils.updateQueryParam('accessToken', null);
+        const queryParamsToRemove = ['accessToken'];
         if (refreshToken) {
-          this.utils.updateQueryParam('refreshToken', null);
+          queryParamsToRemove.push('refreshToken');
         }
+        this.utils.removeQueryParams(queryParamsToRemove);
         try {
           this.updateAndValidateToken(accessToken, 'jwt_token', false);
           if (refreshToken) {
@@ -364,7 +389,7 @@ export class AuthService {
           authPayload.forceFullscreen = true;
         }
         if (authPayload.authUser.isPublic) {
-          this.loadSystemParams(authPayload).subscribe(
+          this.loadSystemParams().subscribe(
             (sysParams) => {
               authPayload = {...authPayload, ...sysParams};
               loadUserSubject.next(authPayload);
@@ -374,6 +399,9 @@ export class AuthService {
               loadUserSubject.error(err);
             }
           );
+        } else if (authPayload.authUser.authority === Authority.PRE_VERIFICATION_TOKEN) {
+          loadUserSubject.next(authPayload);
+          loadUserSubject.complete();
         } else if (authPayload.authUser.userId) {
           this.userService.getUser(authPayload.authUser.userId).subscribe(
             (user) => {
@@ -382,7 +410,7 @@ export class AuthService {
               if (this.userForceFullscreen(authPayload)) {
                 authPayload.forceFullscreen = true;
               }
-              this.loadSystemParams(authPayload).subscribe(
+              this.loadSystemParams().subscribe(
                 (sysParams) => {
                   authPayload = {...authPayload, ...sysParams};
                   let userLang;
@@ -416,25 +444,14 @@ export class AuthService {
     return loadUserSubject;
   }
 
-  private loadIsUserTokenAccessEnabled(authUser: AuthUser): Observable<boolean> {
-    if (authUser.authority === Authority.SYS_ADMIN ||
-        authUser.authority === Authority.TENANT_ADMIN) {
-      return this.http.get<boolean>('/api/user/tokenAccessEnabled', defaultHttpOptions());
-    } else {
-      return of(false);
-    }
-  }
-
-  private loadSystemParams(authPayload: AuthPayload): Observable<any> {
-    const sources: Array<Observable<any>> = [this.loadIsUserTokenAccessEnabled(authPayload.authUser),
-                                             this.fetchAllowedDashboardIds(authPayload),
-                                             this.timeService.loadMaxDatapointsLimit()];
-    return forkJoin(sources)
-      .pipe(map((data) => {
-        const userTokenAccessEnabled: boolean = data[0];
-        const allowedDashboardIds: string[] = data[1];
-        return {userTokenAccessEnabled, allowedDashboardIds};
-      }));
+  private loadSystemParams(): Observable<SysParamsState> {
+    return this.http.get<SysParams>('/api/system/params', defaultHttpOptions()).pipe(
+      map((sysParams) => {
+        this.timeService.setMaxDatapointsLimit(sysParams.maxDatapointsLimit);
+        return sysParams;
+      }),
+      catchError(() => of({} as SysParamsState))
+    );
   }
 
   public refreshJwtToken(loadUserElseStoreJwtToken = true): Observable<LoginResponse> {
@@ -504,12 +521,15 @@ export class AuthService {
     return this.refreshTokenSubject !== null;
   }
 
-  public setUserFromJwtToken(jwtToken, refreshToken, notify) {
+  public setUserFromJwtToken(jwtToken, refreshToken, notify): Observable<boolean> {
+    const authenticatedSubject = new ReplaySubject<boolean>();
     if (!jwtToken) {
       AuthService.clearTokenData();
       if (notify) {
         this.notifyUnauthenticated();
       }
+      authenticatedSubject.next(false);
+      authenticatedSubject.complete();
     } else {
       this.updateAndValidateTokens(jwtToken, refreshToken, true);
       if (notify) {
@@ -518,16 +538,30 @@ export class AuthService {
           (authPayload) => {
             this.notifyUserLoaded(true);
             this.notifyAuthenticated(authPayload);
+            authenticatedSubject.next(true);
+            authenticatedSubject.complete();
           },
           () => {
             this.notifyUserLoaded(true);
             this.notifyUnauthenticated();
+            authenticatedSubject.next(false);
+            authenticatedSubject.complete();
           }
         );
       } else {
-        this.loadUser(false).subscribe();
+        this.loadUser(false).subscribe(
+          () => {
+            authenticatedSubject.next(true);
+            authenticatedSubject.complete();
+          },
+          () => {
+            authenticatedSubject.next(false);
+            authenticatedSubject.complete();
+          }
+        );
       }
     }
+    return authenticatedSubject;
   }
 
   private updateAndValidateTokens(jwtToken, refreshToken, notify: boolean) {
@@ -561,8 +595,8 @@ export class AuthService {
   private updateAndValidateToken(token, prefix, notify) {
     let valid = false;
     const tokenData = this.jwtHelper.decodeToken(token);
-    const issuedAt = tokenData.iat;
-    const expTime = tokenData.exp;
+    const issuedAt = tokenData?.iat;
+    const expTime = tokenData?.exp;
     if (issuedAt && expTime) {
       const ttl = expTime - issuedAt;
       if (ttl > 0) {
@@ -601,24 +635,4 @@ export class AuthService {
     }
   }
 
-  private fetchAllowedDashboardIds(authPayload: AuthPayload): Observable<string[]> {
-    if (authPayload.forceFullscreen && (authPayload.authUser.authority === Authority.TENANT_ADMIN ||
-      authPayload.authUser.authority === Authority.CUSTOMER_USER)) {
-      const pageLink = new PageLink(100);
-      let fetchDashboardsObservable: Observable<PageData<DashboardInfo>>;
-      if (authPayload.authUser.authority === Authority.TENANT_ADMIN) {
-        fetchDashboardsObservable = this.dashboardService.getTenantDashboards(pageLink);
-      } else {
-        fetchDashboardsObservable = this.dashboardService.getCustomerDashboards(authPayload.authUser.customerId, pageLink);
-      }
-      return fetchDashboardsObservable.pipe(
-        map((result) => {
-          const dashboards = result.data;
-          return dashboards.map(dashboard => dashboard.id.id);
-        })
-      );
-    } else {
-      return of([]);
-    }
-  }
 }

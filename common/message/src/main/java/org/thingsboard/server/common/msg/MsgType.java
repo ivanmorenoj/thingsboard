@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,16 @@ public enum MsgType {
     RULE_CHAIN_TO_RULE_CHAIN_MSG,
 
     /**
+     * Message that is sent by RuleNodeActor as input to other RuleChain with command to process TbMsg.
+     */
+    RULE_CHAIN_INPUT_MSG,
+
+    /**
+     * Message that is sent by RuleNodeActor as output to RuleNode in other RuleChain with command to process TbMsg.
+     */
+    RULE_CHAIN_OUTPUT_MSG,
+
+    /**
      * Message that is sent by RuleActor to RuleChainActor with command to process TbMsg by next nodes in chain.
      */
     RULE_TO_RULE_CHAIN_TELL_NEXT_MSG,
@@ -82,11 +92,17 @@ public enum MsgType {
 
     DEVICE_NAME_OR_TYPE_UPDATE_TO_DEVICE_ACTOR_MSG,
 
+    DEVICE_EDGE_UPDATE_TO_DEVICE_ACTOR_MSG,
+
     DEVICE_RPC_REQUEST_TO_DEVICE_ACTOR_MSG,
+
+    DEVICE_RPC_RESPONSE_TO_DEVICE_ACTOR_MSG,
 
     SERVER_RPC_RESPONSE_TO_DEVICE_ACTOR_MSG,
 
     DEVICE_ACTOR_SERVER_SIDE_RPC_TIMEOUT_MSG,
+
+    REMOVE_RPC_TO_DEVICE_ACTOR_MSG,
 
     /**
      * Message that is sent from the Device Actor to Rule Engine. Requires acknowledgement
@@ -101,6 +117,17 @@ public enum MsgType {
     /**
      * Message that is sent by TransportRuleEngineService to Device Actor. Represents messages from the device itself.
      */
-    TRANSPORT_TO_DEVICE_ACTOR_MSG;
+    TRANSPORT_TO_DEVICE_ACTOR_MSG,
+
+    /**
+     * Message that is sent on Edge Event to Edge Session
+     */
+    EDGE_EVENT_UPDATE_TO_EDGE_SESSION_MSG,
+
+    /**
+     * Messages that are sent to and from edge session to start edge synchronization process
+     */
+    EDGE_SYNC_REQUEST_TO_EDGE_SESSION_MSG,
+    EDGE_SYNC_RESPONSE_FROM_EDGE_SESSION_MSG;
 
 }

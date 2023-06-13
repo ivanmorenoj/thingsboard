@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,44 +27,59 @@ import org.springframework.web.context.request.async.DeferredResult;
 import org.thingsboard.common.util.ThingsBoardThreadFactory;
 import org.thingsboard.server.common.data.ApiUsageState;
 import org.thingsboard.server.common.data.Customer;
-import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.DeviceProfile;
 import org.thingsboard.server.common.data.EntityView;
+import org.thingsboard.server.common.data.OtaPackageInfo;
+import org.thingsboard.server.common.data.TbResourceInfo;
 import org.thingsboard.server.common.data.Tenant;
 import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.asset.Asset;
+import org.thingsboard.server.common.data.asset.AssetProfile;
+import org.thingsboard.server.common.data.edge.Edge;
 import org.thingsboard.server.common.data.exception.ThingsboardException;
 import org.thingsboard.server.common.data.id.ApiUsageStateId;
 import org.thingsboard.server.common.data.id.AssetId;
+import org.thingsboard.server.common.data.id.AssetProfileId;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
+import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.EntityIdFactory;
 import org.thingsboard.server.common.data.id.EntityViewId;
+import org.thingsboard.server.common.data.id.OtaPackageId;
+import org.thingsboard.server.common.data.id.RpcId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.RuleNodeId;
+import org.thingsboard.server.common.data.id.TbResourceId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.UserId;
+import org.thingsboard.server.common.data.rpc.Rpc;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleNode;
 import org.thingsboard.server.controller.HttpValidationCallback;
 import org.thingsboard.server.dao.alarm.AlarmService;
+import org.thingsboard.server.dao.asset.AssetProfileService;
 import org.thingsboard.server.dao.asset.AssetService;
 import org.thingsboard.server.dao.customer.CustomerService;
 import org.thingsboard.server.dao.device.DeviceProfileService;
 import org.thingsboard.server.dao.device.DeviceService;
+import org.thingsboard.server.dao.edge.EdgeService;
 import org.thingsboard.server.dao.entityview.EntityViewService;
+import org.thingsboard.server.dao.exception.DataValidationException;
 import org.thingsboard.server.dao.exception.IncorrectParameterException;
+import org.thingsboard.server.dao.ota.OtaPackageService;
+import org.thingsboard.server.dao.resource.ResourceService;
+import org.thingsboard.server.dao.rpc.RpcService;
 import org.thingsboard.server.dao.rule.RuleChainService;
 import org.thingsboard.server.dao.tenant.TenantService;
 import org.thingsboard.server.dao.usagerecord.ApiUsageStateService;
 import org.thingsboard.server.dao.user.UserService;
+import org.thingsboard.server.exception.ToErrorResponseEntity;
 import org.thingsboard.server.service.security.model.SecurityUser;
 import org.thingsboard.server.service.security.permission.AccessControlService;
 import org.thingsboard.server.service.security.permission.Operation;
 import org.thingsboard.server.service.security.permission.Resource;
-import org.thingsboard.server.service.telemetry.exception.ToErrorResponseEntity;
 
 import javax.annotation.Nullable;
 import javax.annotation.PostConstruct;
@@ -83,6 +98,7 @@ public class AccessValidator {
     public static final String CUSTOMER_USER_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION = "Customer user is not allowed to perform this operation!";
     public static final String SYSTEM_ADMINISTRATOR_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION = "System administrator is not allowed to perform this operation!";
     public static final String DEVICE_WITH_REQUESTED_ID_NOT_FOUND = "Device with requested id wasn't found!";
+    public static final String EDGE_WITH_REQUESTED_ID_NOT_FOUND = "Edge with requested id wasn't found!";
     public static final String ENTITY_VIEW_WITH_REQUESTED_ID_NOT_FOUND = "Entity-view with requested id wasn't found!";
 
     @Autowired
@@ -101,6 +117,9 @@ public class AccessValidator {
     protected DeviceProfileService deviceProfileService;
 
     @Autowired
+    protected AssetProfileService assetProfileService;
+
+    @Autowired
     protected AssetService assetService;
 
     @Autowired
@@ -112,11 +131,23 @@ public class AccessValidator {
     @Autowired
     protected EntityViewService entityViewService;
 
+    @Autowired(required = false)
+    protected EdgeService edgeService;
+
     @Autowired
     protected AccessControlService accessControlService;
 
     @Autowired
     protected ApiUsageStateService apiUsageStateService;
+
+    @Autowired
+    protected ResourceService resourceService;
+
+    @Autowired
+    protected OtaPackageService otaPackageService;
+
+    @Autowired
+    protected RpcService rpcService;
 
     private ExecutorService executor;
 
@@ -186,6 +217,9 @@ public class AccessValidator {
             case ASSET:
                 validateAsset(currentUser, operation, entityId, callback);
                 return;
+            case ASSET_PROFILE:
+                validateAssetProfile(currentUser, operation, entityId, callback);
+                return;
             case RULE_CHAIN:
                 validateRuleChain(currentUser, operation, entityId, callback);
                 return;
@@ -204,8 +238,20 @@ public class AccessValidator {
             case ENTITY_VIEW:
                 validateEntityView(currentUser, operation, entityId, callback);
                 return;
+            case EDGE:
+                validateEdge(currentUser, operation, entityId, callback);
+                return;
             case API_USAGE_STATE:
                 validateApiUsageState(currentUser, operation, entityId, callback);
+                return;
+            case TB_RESOURCE:
+                validateResource(currentUser, operation, entityId, callback);
+                return;
+            case OTA_PACKAGE:
+                validateOtaPackage(currentUser, operation, entityId, callback);
+                return;
+            case RPC:
+                validateRpc(currentUser, operation, entityId, callback);
                 return;
             default:
                 //TODO: add support of other entities
@@ -217,8 +263,7 @@ public class AccessValidator {
         if (currentUser.isSystemAdmin()) {
             callback.onSuccess(ValidationResult.accessDenied(SYSTEM_ADMINISTRATOR_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION));
         } else {
-            ListenableFuture<Device> deviceFuture = deviceService.findDeviceByIdAsync(currentUser.getTenantId(), new DeviceId(entityId.getId()));
-            Futures.addCallback(deviceFuture, getCallback(callback, device -> {
+            Futures.addCallback(Futures.immediateFuture(deviceService.findDeviceById(currentUser.getTenantId(), new DeviceId(entityId.getId()))), getCallback(callback, device -> {
                 if (device == null) {
                     return ValidationResult.entityNotFound(DEVICE_WITH_REQUESTED_ID_NOT_FOUND);
                 } else {
@@ -231,6 +276,22 @@ public class AccessValidator {
                 }
             }), executor);
         }
+    }
+
+    private void validateRpc(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
+        ListenableFuture<Rpc> rpcFurure = rpcService.findRpcByIdAsync(currentUser.getTenantId(), new RpcId(entityId.getId()));
+        Futures.addCallback(rpcFurure, getCallback(callback, rpc -> {
+            if (rpc == null) {
+                return ValidationResult.entityNotFound("Rpc with requested id wasn't found!");
+            } else {
+                try {
+                    accessControlService.checkPermission(currentUser, Resource.RPC, operation, entityId, rpc);
+                } catch (ThingsboardException e) {
+                    return ValidationResult.accessDenied(e.getMessage());
+                }
+                return ValidationResult.ok(rpc);
+            }
+        }), executor);
     }
 
     private void validateDeviceProfile(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
@@ -247,6 +308,24 @@ public class AccessValidator {
                     callback.onSuccess(ValidationResult.accessDenied(e.getMessage()));
                 }
                 callback.onSuccess(ValidationResult.ok(deviceProfile));
+            }
+        }
+    }
+
+    private void validateAssetProfile(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
+        if (currentUser.isSystemAdmin()) {
+            callback.onSuccess(ValidationResult.accessDenied(SYSTEM_ADMINISTRATOR_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION));
+        } else {
+            AssetProfile assetProfile = assetProfileService.findAssetProfileById(currentUser.getTenantId(), new AssetProfileId(entityId.getId()));
+            if (assetProfile == null) {
+                callback.onSuccess(ValidationResult.entityNotFound("Asset profile with requested id wasn't found!"));
+            } else {
+                try {
+                    accessControlService.checkPermission(currentUser, Resource.ASSET_PROFILE, operation, entityId, assetProfile);
+                } catch (ThingsboardException e) {
+                    callback.onSuccess(ValidationResult.accessDenied(e.getMessage()));
+                }
+                callback.onSuccess(ValidationResult.ok(assetProfile));
             }
         }
     }
@@ -270,6 +349,40 @@ public class AccessValidator {
                 callback.onSuccess(ValidationResult.ok(apiUsageState));
             }
         }
+    }
+
+    private void validateOtaPackage(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
+        if (currentUser.isSystemAdmin()) {
+            callback.onSuccess(ValidationResult.accessDenied(SYSTEM_ADMINISTRATOR_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION));
+        } else {
+            OtaPackageInfo otaPackage = otaPackageService.findOtaPackageInfoById(currentUser.getTenantId(), new OtaPackageId(entityId.getId()));
+            if (otaPackage == null) {
+                callback.onSuccess(ValidationResult.entityNotFound("OtaPackage with requested id wasn't found!"));
+            } else {
+                try {
+                    accessControlService.checkPermission(currentUser, Resource.OTA_PACKAGE, operation, entityId, otaPackage);
+                } catch (ThingsboardException e) {
+                    callback.onSuccess(ValidationResult.accessDenied(e.getMessage()));
+                }
+                callback.onSuccess(ValidationResult.ok(otaPackage));
+            }
+        }
+    }
+
+    private void validateResource(SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
+        ListenableFuture<TbResourceInfo> resourceFuture = resourceService.findResourceInfoByIdAsync(currentUser.getTenantId(), new TbResourceId(entityId.getId()));
+        Futures.addCallback(resourceFuture, getCallback(callback, resource -> {
+            if (resource == null) {
+                return ValidationResult.entityNotFound("Resource with requested id wasn't found!");
+            } else {
+                try {
+                    accessControlService.checkPermission(currentUser, Resource.TB_RESOURCE, operation, entityId, resource);
+                } catch (ThingsboardException e) {
+                    return ValidationResult.accessDenied(e.getMessage());
+                }
+                return ValidationResult.ok(resource);
+            }
+        }), executor);
     }
 
     private void validateAsset(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
@@ -363,7 +476,7 @@ public class AccessValidator {
         } else if (currentUser.isSystemAdmin()) {
             callback.onSuccess(ValidationResult.ok(null));
         } else {
-            ListenableFuture<Tenant> tenantFuture = tenantService.findTenantByIdAsync(currentUser.getTenantId(), new TenantId(entityId.getId()));
+            ListenableFuture<Tenant> tenantFuture = tenantService.findTenantByIdAsync(currentUser.getTenantId(), TenantId.fromUUID(entityId.getId()));
             Futures.addCallback(tenantFuture, getCallback(callback, tenant -> {
                 if (tenant == null) {
                     return ValidationResult.entityNotFound("Tenant with requested id wasn't found!");
@@ -423,6 +536,26 @@ public class AccessValidator {
         }
     }
 
+    private void validateEdge(final SecurityUser currentUser, Operation operation, EntityId entityId, FutureCallback<ValidationResult> callback) {
+        if (currentUser.isSystemAdmin()) {
+            callback.onSuccess(ValidationResult.accessDenied(SYSTEM_ADMINISTRATOR_IS_NOT_ALLOWED_TO_PERFORM_THIS_OPERATION));
+        } else {
+            ListenableFuture<Edge> edgeFuture = edgeService.findEdgeByIdAsync(currentUser.getTenantId(), new EdgeId(entityId.getId()));
+            Futures.addCallback(edgeFuture, getCallback(callback, edge -> {
+                if (edge == null) {
+                    return ValidationResult.entityNotFound(EDGE_WITH_REQUESTED_ID_NOT_FOUND);
+                } else {
+                    try {
+                        accessControlService.checkPermission(currentUser, Resource.EDGE, operation, entityId, edge);
+                    } catch (ThingsboardException e) {
+                        return ValidationResult.accessDenied(e.getMessage());
+                    }
+                    return ValidationResult.ok(edge);
+                }
+            }), executor);
+        }
+    }
+
     private <T, V> FutureCallback<T> getCallback(FutureCallback<ValidationResult> callback, Function<T, ValidationResult<V>> transformer) {
         return new FutureCallback<T>() {
             @Override
@@ -441,7 +574,7 @@ public class AccessValidator {
         ResponseEntity responseEntity;
         if (e instanceof ToErrorResponseEntity) {
             responseEntity = ((ToErrorResponseEntity) e).toErrorResponseEntity();
-        } else if (e instanceof IllegalArgumentException || e instanceof IncorrectParameterException) {
+        } else if (e instanceof IllegalArgumentException || e instanceof IncorrectParameterException || e instanceof DataValidationException) {
             responseEntity = new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);
         } else {
             responseEntity = new ResponseEntity<>(defaultErrorStatus);

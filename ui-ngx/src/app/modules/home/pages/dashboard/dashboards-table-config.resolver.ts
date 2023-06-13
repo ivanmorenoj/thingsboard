@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -64,6 +64,12 @@ import {
 } from '@modules/home/pages/dashboard/make-dashboard-public-dialog.component';
 import { DashboardTabsComponent } from '@home/pages/dashboard/dashboard-tabs.component';
 import { ImportExportService } from '@home/components/import-export/import-export.service';
+import { EdgeService } from '@core/http/edge.service';
+import {
+  AddEntitiesToEdgeDialogComponent,
+  AddEntitiesToEdgeDialogData
+} from '@home/dialogs/add-entities-to-edge-dialog.component';
+import { HomeDialogsService } from '@home/dialogs/home-dialogs.service';
 
 @Injectable()
 export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<DashboardInfo | Dashboard>> {
@@ -73,7 +79,9 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
   constructor(private store: Store<AppState>,
               private dashboardService: DashboardService,
               private customerService: CustomerService,
+              private edgeService: EdgeService,
               private dialogService: DialogService,
+              private homeDialogs: HomeDialogsService,
               private importExport: ImportExportService,
               private translate: TranslateService,
               private datePipe: DatePipe,
@@ -86,8 +94,10 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
     this.config.entityTranslations = entityTypeTranslations.get(EntityType.DASHBOARD);
     this.config.entityResources = entityTypeResources.get(EntityType.DASHBOARD);
 
+    this.config.rowPointer = true;
+
     this.config.deleteEntityTitle = dashboard =>
-      this.translate.instant('dashboard.delete-dashboard-title', { dashboardTitle: dashboard.title });
+      this.translate.instant('dashboard.delete-dashboard-title', {dashboardTitle: dashboard.title});
     this.config.deleteEntityContent = () => this.translate.instant('dashboard.delete-dashboard-text');
     this.config.deleteEntitiesTitle = count => this.translate.instant('dashboard.delete-dashboards-title', {count});
     this.config.deleteEntitiesContent = () => this.translate.instant('dashboard.delete-dashboards-text');
@@ -97,19 +107,34 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
       return this.dashboardService.saveDashboard(dashboard as Dashboard);
     };
     this.config.onEntityAction = action => this.onDashboardAction(action);
-    this.config.detailsReadonly = () => this.config.componentsData.dashboardScope === 'customer_user';
+    this.config.detailsReadonly = () => (this.config.componentsData.dashboardScope === 'customer_user' ||
+      this.config.componentsData.dashboardScope === 'edge_customer_user');
+
+    this.config.handleRowClick = ($event, dashboard) => {
+      if (this.config.isDetailsOpen()) {
+        this.config.toggleEntityDetails($event, dashboard);
+      } else {
+        this.openDashboard($event, dashboard);
+      }
+      return true;
+    };
   }
 
   resolve(route: ActivatedRouteSnapshot): Observable<EntityTableConfig<DashboardInfo | Dashboard>> {
     const routeParams = route.params;
     this.config.componentsData = {
       dashboardScope: route.data.dashboardsType,
-      customerId: routeParams.customerId
+      customerId: routeParams.customerId,
+      edgeId: routeParams.edgeId
     };
     return this.store.pipe(select(selectAuthUser), take(1)).pipe(
       tap((authUser) => {
         if (authUser.authority === Authority.CUSTOMER_USER) {
-          this.config.componentsData.dashboardScope = 'customer_user';
+          if (route.data.dashboardsType === 'edge') {
+            this.config.componentsData.dashboardScope = 'edge_customer_user';
+          } else {
+            this.config.componentsData.dashboardScope = 'customer_user';
+          }
           this.config.componentsData.customerId = authUser.customerId;
         }
       }),
@@ -124,6 +149,10 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
           } else {
             this.config.tableTitle = parentCustomer.title + ': ' + this.translate.instant('dashboard.dashboards');
           }
+        } else if (this.config.componentsData.dashboardScope === 'edge') {
+          this.edgeService.getEdge(this.config.componentsData.edgeId).subscribe(
+            edge => this.config.tableTitle = edge.name + ': ' + this.translate.instant('dashboard.dashboards')
+          );
         } else {
           this.config.tableTitle = this.translate.instant('dashboard.dashboards');
         }
@@ -132,7 +161,8 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         this.config.cellActionDescriptors = this.configureCellActions(this.config.componentsData.dashboardScope);
         this.config.groupActionDescriptors = this.configureGroupActions(this.config.componentsData.dashboardScope);
         this.config.addActionDescriptors = this.configureAddActions(this.config.componentsData.dashboardScope);
-        this.config.addEnabled = this.config.componentsData.dashboardScope !== 'customer_user';
+        this.config.addEnabled = !(this.config.componentsData.dashboardScope === 'customer_user' ||
+          this.config.componentsData.dashboardScope === 'edge_customer_user');
         this.config.entitiesDeleteEnabled = this.config.componentsData.dashboardScope === 'tenant';
         this.config.deleteEnabled = () => this.config.componentsData.dashboardScope === 'tenant';
         return this.config;
@@ -165,6 +195,9 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
       this.config.entitiesFetchFunction = pageLink =>
         this.dashboardService.getTenantDashboards(pageLink);
       this.config.deleteEntity = id => this.dashboardService.deleteDashboard(id.id);
+    } else if (dashboardScope === 'edge' || dashboardScope === 'edge_customer_user') {
+      this.config.entitiesFetchFunction = pageLink =>
+        this.dashboardService.getEdgeDashboards(this.config.componentsData.edgeId, pageLink, this.config.componentsData.dashboardsType);
     } else {
       this.config.entitiesFetchFunction = pageLink =>
         this.dashboardService.getCustomerDashboards(this.config.componentsData.customerId, pageLink);
@@ -175,14 +208,6 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
 
   configureCellActions(dashboardScope: string): Array<CellActionDescriptor<DashboardInfo>> {
     const actions: Array<CellActionDescriptor<DashboardInfo>> = [];
-    actions.push(
-      {
-        name: this.translate.instant('dashboard.open-dashboard'),
-        icon: 'dashboard',
-        isEnabled: () => true,
-        onAction: ($event, entity) => this.openDashboard($event, entity)
-      }
-    );
     if (dashboardScope === 'tenant') {
       actions.push(
         {
@@ -233,6 +258,30 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         }
       );
     }
+    if (dashboardScope === 'edge') {
+      actions.push(
+        {
+          name: this.translate.instant('dashboard.export'),
+          icon: 'file_download',
+          isEnabled: () => true,
+          onAction: ($event, entity) => this.exportDashboard($event, entity)
+        },
+        {
+          name: this.translate.instant('edge.unassign-from-edge'),
+          icon: 'assignment_return',
+          isEnabled: (entity) => true,
+          onAction: ($event, entity) => this.unassignFromEdge($event, entity)
+        }
+      );
+    }
+    actions.push(
+      {
+        name: this.translate.instant('dashboard.dashboard-details'),
+        icon: 'edit',
+        isEnabled: () => true,
+        onAction: ($event, entity) => this.config.toggleEntityDetails($event, entity)
+      }
+    );
     return actions;
   }
 
@@ -267,6 +316,16 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         }
       );
     }
+    if (dashboardScope === 'edge') {
+      actions.push(
+        {
+          name: this.translate.instant('dashboard.unassign-dashboards'),
+          icon: 'assignment_return',
+          isEnabled: true,
+          onAction: ($event, entities) => this.unassignDashboardsFromEdge($event, entities)
+        }
+      );
+    }
     return actions;
   }
 
@@ -278,7 +337,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
           name: this.translate.instant('dashboard.create-new-dashboard'),
           icon: 'insert_drive_file',
           isEnabled: () => true,
-          onAction: ($event) => this.config.table.addEntity($event)
+          onAction: ($event) => this.config.getTable().addEntity($event)
         },
         {
           name: this.translate.instant('dashboard.import'),
@@ -298,6 +357,16 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         }
       );
     }
+    if (dashboardScope === 'edge') {
+      actions.push(
+        {
+          name: this.translate.instant('dashboard.assign-new-dashboard'),
+          icon: 'add',
+          isEnabled: () => true,
+          onAction: ($event) => this.addDashboardsToEdge($event)
+        }
+      );
+    }
     return actions;
   }
 
@@ -307,6 +376,8 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
     }
     if (this.config.componentsData.dashboardScope === 'customer') {
       this.router.navigateByUrl(`customers/${this.config.componentsData.customerId}/dashboards/${dashboard.id.id}`);
+    } else if (this.config.componentsData.dashboardScope === 'edge') {
+      this.router.navigateByUrl(`edgeInstances/${this.config.componentsData.edgeId}/dashboards/${dashboard.id.id}`);
     } else {
       this.router.navigateByUrl(`dashboards/${dashboard.id.id}`);
     }
@@ -316,7 +387,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
     this.importExport.importDashboard().subscribe(
       (dashboard) => {
         if (dashboard) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       }
     );
@@ -344,7 +415,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -364,7 +435,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
           }
         }).afterClosed()
           .subscribe(() => {
-              this.config.table.updateData();
+            this.config.updateData();
           });
       }
     );
@@ -384,7 +455,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         if (res) {
           this.dashboardService.makeDashboardPrivate(dashboard.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -424,7 +495,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
     }).afterClosed()
       .subscribe((res) => {
         if (res) {
-          this.config.table.updateData();
+          this.config.updateData();
         }
       });
   }
@@ -443,7 +514,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
         if (res) {
           this.dashboardService.unassignDashboardFromCustomer(customerId, dashboard.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData(this.config.componentsData.dashboardScope !== 'tenant');
             }
           );
         }
@@ -471,7 +542,7 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
           );
           forkJoin(tasks).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -499,8 +570,81 @@ export class DashboardsTableConfigResolver implements Resolve<EntityTableConfig<
       case 'unassignFromCustomer':
         this.unassignFromCustomer(action.event, action.entity, this.config.componentsData.customerId);
         return true;
+      case 'unassignFromEdge':
+        this.unassignFromEdge(action.event, action.entity);
+        return true;
     }
     return false;
+  }
+
+  addDashboardsToEdge($event: Event) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    this.dialog.open<AddEntitiesToEdgeDialogComponent, AddEntitiesToEdgeDialogData,
+      boolean>(AddEntitiesToEdgeDialogComponent, {
+      disableClose: true,
+      panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+      data: {
+        edgeId: this.config.componentsData.edgeId,
+        entityType: EntityType.DASHBOARD
+      }
+    }).afterClosed()
+      .subscribe((res) => {
+        if (res) {
+          this.config.updateData();
+        }
+      });
+  }
+
+  unassignFromEdge($event: Event, dashboard: DashboardInfo) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    this.dialogService.confirm(
+      this.translate.instant('dashboard.unassign-dashboard-title', {dashboardTitle: dashboard.title}),
+      this.translate.instant('dashboard.unassign-dashboard-from-edge-text'),
+      this.translate.instant('action.no'),
+      this.translate.instant('action.yes'),
+      true
+    ).subscribe((res) => {
+        if (res) {
+          this.dashboardService.unassignDashboardFromEdge(this.config.componentsData.edgeId, dashboard.id.id).subscribe(
+            () => {
+              this.config.updateData(this.config.componentsData.dashboardScope !== 'tenant');
+            }
+          );
+        }
+      }
+    );
+  }
+
+  unassignDashboardsFromEdge($event: Event, dashboards: Array<DashboardInfo>) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    this.dialogService.confirm(
+      this.translate.instant('dashboard.unassign-dashboards-from-edge-title', {count: dashboards.length}),
+      this.translate.instant('dashboard.unassign-dashboards-from-edge-text'),
+      this.translate.instant('action.no'),
+      this.translate.instant('action.yes'),
+      true
+    ).subscribe((res) => {
+        if (res) {
+          const tasks: Observable<any>[] = [];
+          dashboards.forEach(
+            (dashboard) => {
+              tasks.push(this.dashboardService.unassignDashboardFromEdge(this.config.componentsData.edgeId, dashboard.id.id));
+            }
+          );
+          forkJoin(tasks).subscribe(
+            () => {
+              this.config.updateData();
+            }
+          );
+        }
+      }
+    );
   }
 
 }

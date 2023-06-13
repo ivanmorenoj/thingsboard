@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,16 @@
 /// limitations under the License.
 ///
 
-import { Component, Input, OnInit, ViewChild } from '@angular/core';
+import {
+  AfterViewInit,
+  ChangeDetectorRef,
+  Component,
+  Input,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+  ViewContainerRef
+} from '@angular/core';
 import { TranslateService } from '@ngx-translate/core';
 import { DatePipe } from '@angular/common';
 import { MatDialog } from '@angular/material/dialog';
@@ -24,13 +33,15 @@ import { EventTableConfig } from './event-table-config';
 import { EventService } from '@core/http/event.service';
 import { DialogService } from '@core/services/dialog.service';
 import { DebugEventType, EventType } from '@shared/models/event.models';
+import { Overlay } from '@angular/cdk/overlay';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'tb-event-table',
   templateUrl: './event-table.component.html',
   styleUrls: ['./event-table.component.scss']
 })
-export class EventTableComponent implements OnInit {
+export class EventTableComponent implements OnInit, AfterViewInit, OnDestroy {
 
   @Input()
   tenantId: string;
@@ -76,11 +87,16 @@ export class EventTableComponent implements OnInit {
 
   eventTableConfig: EventTableConfig;
 
+  private isEmptyData$: Subscription;
+
   constructor(private eventService: EventService,
               private dialogService: DialogService,
               private translate: TranslateService,
               private datePipe: DatePipe,
-              private dialog: MatDialog) {
+              private dialog: MatDialog,
+              private overlay: Overlay,
+              private viewContainerRef: ViewContainerRef,
+              private cd: ChangeDetectorRef) {
   }
 
   ngOnInit() {
@@ -95,8 +111,21 @@ export class EventTableComponent implements OnInit {
       this.tenantId,
       this.defaultEventType,
       this.disabledEventTypes,
-      this.debugEventTypes
+      this.debugEventTypes,
+      this.overlay,
+      this.viewContainerRef,
+      this.cd
     );
+  }
+
+  ngAfterViewInit() {
+    this.isEmptyData$ = this.entitiesTable.dataSource.isEmpty().subscribe(value => this.eventTableConfig.hideClearEventAction = value);
+  }
+
+  ngOnDestroy() {
+    if (this.isEmptyData$) {
+      this.isEmptyData$.unsubscribe();
+    }
   }
 
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,12 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.swagger.annotations.ApiModel;
 import org.thingsboard.server.common.data.DeviceTransportType;
 
+import java.io.Serializable;
+
+@ApiModel
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeInfo(
         use = JsonTypeInfo.Id.NAME,
@@ -29,11 +33,14 @@ import org.thingsboard.server.common.data.DeviceTransportType;
 @JsonSubTypes({
         @JsonSubTypes.Type(value = DefaultDeviceTransportConfiguration.class, name = "DEFAULT"),
         @JsonSubTypes.Type(value = MqttDeviceTransportConfiguration.class, name = "MQTT"),
+        @JsonSubTypes.Type(value = CoapDeviceTransportConfiguration.class, name = "COAP"),
         @JsonSubTypes.Type(value = Lwm2mDeviceTransportConfiguration.class, name = "LWM2M"),
-        @JsonSubTypes.Type(value = CoapDeviceTransportConfiguration.class, name = "COAP")})
-public interface DeviceTransportConfiguration {
-
+        @JsonSubTypes.Type(value = SnmpDeviceTransportConfiguration.class, name = "SNMP")})
+public interface DeviceTransportConfiguration extends Serializable {
     @JsonIgnore
     DeviceTransportType getType();
+
+    default void validate() {
+    }
 
 }

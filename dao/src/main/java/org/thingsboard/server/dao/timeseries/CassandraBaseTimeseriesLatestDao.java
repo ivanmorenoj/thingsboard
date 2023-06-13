@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import com.datastax.oss.driver.api.core.cql.BoundStatementBuilder;
 import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.datastax.oss.driver.api.core.cql.Statement;
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder;
-import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -34,17 +33,17 @@ import org.thingsboard.server.common.data.kv.Aggregation;
 import org.thingsboard.server.common.data.kv.BaseReadTsKvQuery;
 import org.thingsboard.server.common.data.kv.DeleteTsKvQuery;
 import org.thingsboard.server.common.data.kv.ReadTsKvQuery;
+import org.thingsboard.server.common.data.kv.ReadTsKvQueryResult;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
+import org.thingsboard.server.common.data.kv.TsKvLatestRemovingResult;
 import org.thingsboard.server.dao.model.ModelConstants;
 import org.thingsboard.server.dao.nosql.TbResultSet;
 import org.thingsboard.server.dao.sqlts.AggregationTimeseriesDao;
 import org.thingsboard.server.dao.util.NoSqlTsLatestDao;
 
-import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
 
 import static com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal;
 
@@ -61,14 +60,23 @@ public class CassandraBaseTimeseriesLatestDao extends AbstractCassandraBaseTimes
     private PreparedStatement findAllLatestStmt;
 
     @Override
+    public ListenableFuture<Optional<TsKvEntry>> findLatestOpt(TenantId tenantId, EntityId entityId, String key) {
+        return findLatest(tenantId, entityId, key, rs -> convertResultToTsKvEntryOpt(key, rs.one()));
+    }
+
+    @Override
     public ListenableFuture<TsKvEntry> findLatest(TenantId tenantId, EntityId entityId, String key) {
+        return findLatest(tenantId, entityId, key, rs -> convertResultToTsKvEntry(key, rs.one()));
+    }
+
+    private <T> ListenableFuture<T> findLatest(TenantId tenantId, EntityId entityId, String key, java.util.function.Function<TbResultSet, T> function) {
         BoundStatementBuilder stmtBuilder = new BoundStatementBuilder(getFindLatestStmt().bind());
         stmtBuilder.setString(0, entityId.getEntityType().name());
         stmtBuilder.setUuid(1, entityId.getId());
         stmtBuilder.setString(2, key);
         BoundStatement stmt = stmtBuilder.build();
         log.debug(GENERATED_QUERY_FOR_ENTITY_TYPE_AND_ENTITY_ID, stmt, entityId.getEntityType(), entityId.getId());
-        return getFuture(executeAsyncRead(tenantId, stmt), rs -> convertResultToTsKvEntry(key, rs.one()));
+        return getFuture(executeAsyncRead(tenantId, stmt), function);
     }
 
     @Override
@@ -114,7 +122,7 @@ public class CassandraBaseTimeseriesLatestDao extends AbstractCassandraBaseTimes
     }
 
     @Override
-    public ListenableFuture<Void> removeLatest(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
+    public ListenableFuture<TsKvLatestRemovingResult> removeLatest(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
         ListenableFuture<TsKvEntry> latestEntryFuture = findLatest(tenantId, entityId, query.getKey());
 
         ListenableFuture<Boolean> booleanFuture = Futures.transform(latestEntryFuture, latestEntry -> {
@@ -127,57 +135,37 @@ public class CassandraBaseTimeseriesLatestDao extends AbstractCassandraBaseTimes
             return false;
         }, readResultsProcessingExecutor);
 
-        ListenableFuture<Void> removedLatestFuture = Futures.transformAsync(booleanFuture, isRemove -> {
+        ListenableFuture<Boolean> removedLatestFuture = Futures.transformAsync(booleanFuture, isRemove -> {
             if (isRemove) {
-                return deleteLatest(tenantId, entityId, query.getKey());
+                return Futures.transform(deleteLatest(tenantId, entityId, query.getKey()), res -> true, MoreExecutors.directExecutor());
             }
-            return Futures.immediateFuture(null);
+            return Futures.immediateFuture(false);
         }, readResultsProcessingExecutor);
 
-        final SimpleListenableFuture<Void> resultFuture = new SimpleListenableFuture<>();
-        Futures.addCallback(removedLatestFuture, new FutureCallback<Void>() {
-            @Override
-            public void onSuccess(@Nullable Void result) {
-                if (query.getRewriteLatestIfDeleted()) {
-                    ListenableFuture<Void> savedLatestFuture = Futures.transformAsync(booleanFuture, isRemove -> {
-                        if (isRemove) {
-                            return getNewLatestEntryFuture(tenantId, entityId, query);
-                        }
-                        return Futures.immediateFuture(null);
-                    }, readResultsProcessingExecutor);
-
-                    try {
-                        resultFuture.set(savedLatestFuture.get());
-                    } catch (InterruptedException | ExecutionException e) {
-                        log.warn("Could not get latest saved value for [{}], {}", entityId, query.getKey(), e);
-                    }
-                } else {
-                    resultFuture.set(null);
-                }
+        return Futures.transformAsync(removedLatestFuture, isRemoved -> {
+            if (isRemoved && query.getRewriteLatestIfDeleted()) {
+                return getNewLatestEntryFuture(tenantId, entityId, query);
             }
-
-            @Override
-            public void onFailure(Throwable t) {
-                log.warn("[{}] Failed to process remove of the latest value", entityId, t);
-            }
+            return Futures.immediateFuture(new TsKvLatestRemovingResult(query.getKey(), isRemoved));
         }, MoreExecutors.directExecutor());
-        return resultFuture;
     }
 
-    private ListenableFuture<Void> getNewLatestEntryFuture(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
+    private ListenableFuture<TsKvLatestRemovingResult> getNewLatestEntryFuture(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
         long startTs = 0;
         long endTs = query.getStartTs() - 1;
         ReadTsKvQuery findNewLatestQuery = new BaseReadTsKvQuery(query.getKey(), startTs, endTs, endTs - startTs, 1,
                 Aggregation.NONE, DESC_ORDER);
-        ListenableFuture<List<TsKvEntry>> future = aggregationTimeseriesDao.findAllAsync(tenantId, entityId, findNewLatestQuery);
+        ListenableFuture<ReadTsKvQueryResult> future = aggregationTimeseriesDao.findAllAsync(tenantId, entityId, findNewLatestQuery);
 
-        return Futures.transformAsync(future, entryList -> {
+        return Futures.transformAsync(future, result -> {
+            var entryList = result.getData();
             if (entryList.size() == 1) {
-                return saveLatest(tenantId, entityId, entryList.get(0));
+                TsKvEntry entry = entryList.get(0);
+                return Futures.transform(saveLatest(tenantId, entityId, entryList.get(0)), v -> new TsKvLatestRemovingResult(entry), MoreExecutors.directExecutor());
             } else {
                 log.trace("Could not find new latest value for [{}], key - {}", entityId, query.getKey());
             }
-            return Futures.immediateFuture(null);
+            return Futures.immediateFuture(new TsKvLatestRemovingResult(query.getKey(), true));
         }, readResultsProcessingExecutor);
     }
 

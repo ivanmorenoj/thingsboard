@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,11 +51,11 @@ public abstract class AbstractComponentDescriptorInsertRepository implements Com
                 TransactionStatus transaction = getTransactionStatus(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
                 try {
                     componentDescriptorEntity = processSaveOrUpdate(entity, insertOrUpdateOnUniqueKeyConflict);
+                    transactionManager.commit(transaction);
                 } catch (Throwable th) {
                     log.trace("Could not execute the update statement for Component Descriptor with id {}, name {} and entityType {}", entity.getUuid(), entity.getName(), entity.getType());
                     transactionManager.rollback(transaction);
                 }
-                transactionManager.commit(transaction);
             } else {
                 log.trace("Could not execute the insert statement for Component Descriptor with id {}, name {} and entityType {}", entity.getUuid(), entity.getName(), entity.getType());
             }
@@ -76,7 +76,8 @@ public abstract class AbstractComponentDescriptorInsertRepository implements Com
                 .setParameter("name", entity.getName())
                 .setParameter("scope", entity.getScope().name())
                 .setParameter("search_text", entity.getSearchText())
-                .setParameter("type", entity.getType().name());
+                .setParameter("type", entity.getType().name())
+                .setParameter("clustering_mode", entity.getClusteringMode().name());
     }
 
     private ComponentDescriptorEntity processSaveOrUpdate(ComponentDescriptorEntity entity, String query) {

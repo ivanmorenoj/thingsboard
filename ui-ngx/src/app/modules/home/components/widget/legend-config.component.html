@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -15,9 +15,50 @@
     limitations under the License.
 
 -->
-<button cdkOverlayOrigin #legendConfigPanelOrigin="cdkOverlayOrigin" [disabled]="disabled"
-        type="button"
-        mat-button mat-raised-button color="primary" (click)="openEditMode()">
-  <mat-icon class="material-icons">toc</mat-icon>
-  <span translate>legend.settings</span>
-</button>
+<form [formGroup]="legendConfigForm">
+  <div fxLayout.xs="column" fxLayoutAlign.xs="center" fxLayout="row" fxLayoutAlign="start center"
+       fxLayoutGap="8px">
+    <mat-form-field fxFlex>
+      <mat-label translate>legend.direction</mat-label>
+      <mat-select matInput formControlName="direction">
+        <mat-option *ngFor="let direction of legendDirections" [value]="direction">
+          {{ legendDirectionTranslations.get(legendDirection[direction]) | translate }}
+        </mat-option>
+      </mat-select>
+    </mat-form-field>
+    <mat-form-field fxFlex>
+      <mat-label translate>legend.position</mat-label>
+      <mat-select matInput formControlName="position">
+        <mat-option *ngFor="let pos of legendPositions" [value]="pos"
+                    [disabled]="legendConfigForm.get('direction').value === legendDirection.row &&
+                                (pos === legendPosition.left || pos === legendPosition.right)">
+          {{ legendPositionTranslations.get(legendPosition[pos]) | translate }}
+        </mat-option>
+      </mat-select>
+    </mat-form-field>
+  </div>
+  <div fxFlex fxLayout="row" fxLayout.xs="column" fxLayoutGap.gt-xs="8px">
+    <mat-checkbox formControlName="showMin" fxFlex>
+      {{ 'legend.show-min' | translate }}
+    </mat-checkbox>
+    <mat-checkbox formControlName="showMax" fxFlex>
+      {{ 'legend.show-max' | translate }}
+    </mat-checkbox>
+  </div>
+  <div fxFlex fxLayout="row" fxLayout.xs="column" fxLayoutGap.gt-xs="8px">
+    <mat-checkbox formControlName="showAvg" fxFlex>
+      {{ 'legend.show-avg' | translate }}
+    </mat-checkbox>
+    <mat-checkbox formControlName="showTotal" fxFlex>
+      {{ 'legend.show-total' | translate }}
+    </mat-checkbox>
+  </div>
+  <div fxFlex fxLayout="row" fxLayout.xs="column" fxLayoutGap.gt-xs="8px">
+    <mat-checkbox formControlName="showLatest" fxFlex>
+      {{ 'legend.show-latest' | translate }}
+    </mat-checkbox>
+    <mat-checkbox formControlName="sortDataKeys" fxFlex>
+      {{ 'legend.sort-legend' | translate }}
+    </mat-checkbox>
+  </div>
+</form>

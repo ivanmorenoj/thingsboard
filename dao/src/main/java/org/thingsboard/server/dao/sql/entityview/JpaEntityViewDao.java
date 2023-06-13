@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,15 @@
 package org.thingsboard.server.dao.sql.entityview;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.data.EntitySubtype;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.EntityView;
 import org.thingsboard.server.common.data.EntityViewInfo;
+import org.thingsboard.server.common.data.id.EntityViewId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
@@ -31,6 +33,7 @@ import org.thingsboard.server.dao.entityview.EntityViewDao;
 import org.thingsboard.server.dao.model.sql.EntityViewEntity;
 import org.thingsboard.server.dao.model.sql.EntityViewInfoEntity;
 import org.thingsboard.server.dao.sql.JpaAbstractSearchTextDao;
+import org.thingsboard.server.dao.util.SqlDao;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,6 +46,8 @@ import java.util.UUID;
  * Created by Victor Basanets on 8/31/2017.
  */
 @Component
+@Slf4j
+@SqlDao
 public class JpaEntityViewDao extends JpaAbstractSearchTextDao<EntityViewEntity, EntityView>
         implements EntityViewDao {
 
@@ -55,7 +60,7 @@ public class JpaEntityViewDao extends JpaAbstractSearchTextDao<EntityViewEntity,
     }
 
     @Override
-    protected CrudRepository<EntityViewEntity, UUID> getCrudRepository() {
+    protected JpaRepository<EntityViewEntity, UUID> getRepository() {
         return entityViewRepository;
     }
 
@@ -155,9 +160,9 @@ public class JpaEntityViewDao extends JpaAbstractSearchTextDao<EntityViewEntity,
     }
 
     @Override
-    public ListenableFuture<List<EntityView>> findEntityViewsByTenantIdAndEntityIdAsync(UUID tenantId, UUID entityId) {
-        return service.submit(() -> DaoUtil.convertDataList(
-                entityViewRepository.findAllByTenantIdAndEntityId(tenantId, entityId)));
+    public List<EntityView> findEntityViewsByTenantIdAndEntityId(UUID tenantId, UUID entityId) {
+        return DaoUtil.convertDataList(
+                entityViewRepository.findAllByTenantIdAndEntityId(tenantId, entityId));
     }
 
     @Override
@@ -170,9 +175,58 @@ public class JpaEntityViewDao extends JpaAbstractSearchTextDao<EntityViewEntity,
         if (types != null && !types.isEmpty()) {
             list = new ArrayList<>();
             for (String type : types) {
-                list.add(new EntitySubtype(new TenantId(tenantId), EntityType.ENTITY_VIEW, type));
+                list.add(new EntitySubtype(TenantId.fromUUID(tenantId), EntityType.ENTITY_VIEW, type));
             }
         }
         return list;
+    }
+
+    @Override
+    public PageData<EntityView> findEntityViewsByTenantIdAndEdgeId(UUID tenantId, UUID edgeId, PageLink pageLink) {
+        log.debug("Try to find entity views by tenantId [{}], edgeId [{}] and pageLink [{}]", tenantId, edgeId, pageLink);
+        return DaoUtil.toPageData(entityViewRepository
+                .findByTenantIdAndEdgeId(
+                        tenantId,
+                        edgeId,
+                        Objects.toString(pageLink.getTextSearch(), ""),
+                        DaoUtil.toPageable(pageLink)));
+    }
+
+    @Override
+    public PageData<EntityView> findEntityViewsByTenantIdAndEdgeIdAndType(UUID tenantId, UUID edgeId, String type, PageLink pageLink) {
+        log.debug("Try to find entity views by tenantId [{}], edgeId [{}], type [{}] and pageLink [{}]", tenantId, edgeId, type, pageLink);
+        return DaoUtil.toPageData(entityViewRepository
+                .findByTenantIdAndEdgeIdAndType(
+                        tenantId,
+                        edgeId,
+                        type,
+                        Objects.toString(pageLink.getTextSearch(), ""),
+                        DaoUtil.toPageable(pageLink)));
+    }
+
+    @Override
+    public EntityView findByTenantIdAndExternalId(UUID tenantId, UUID externalId) {
+        return DaoUtil.getData(entityViewRepository.findByTenantIdAndExternalId(tenantId, externalId));
+    }
+
+    @Override
+    public PageData<EntityView> findByTenantId(UUID tenantId, PageLink pageLink) {
+        return findEntityViewsByTenantId(tenantId, pageLink);
+    }
+
+    @Override
+    public EntityViewId getExternalIdByInternal(EntityViewId internalId) {
+        return Optional.ofNullable(entityViewRepository.getExternalIdById(internalId.getId()))
+                .map(EntityViewId::new).orElse(null);
+    }
+
+    @Override
+    public EntityView findByTenantIdAndName(UUID tenantId, String name) {
+        return findEntityViewByTenantIdAndName(tenantId, name).orElse(null);
+    }
+
+    @Override
+    public EntityType getEntityType() {
+        return EntityType.ENTITY_VIEW;
     }
 }

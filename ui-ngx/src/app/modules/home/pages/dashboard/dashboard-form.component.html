@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -55,9 +55,25 @@
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'unassignFromEdge')"
+          [fxShow]="!isEdit && dashboardScope === 'edge'">
+    {{ 'edge.unassign-from-edge' | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'delete')"
           [fxShow]="!hideDelete() && !isEdit">
     {{'dashboard.delete' | translate }}
+  </button>
+</div>
+<div fxLayout="row">
+  <button mat-raised-button
+          ngxClipboard
+          (cbOnSuccess)="onDashboardIdCopied($event)"
+          [cbContent]="entity?.id?.id"
+          [fxShow]="!isEdit">
+    <mat-icon svgIcon="mdi:clipboard-arrow-left"></mat-icon>
+    <span translate>dashboard.copyId</span>
   </button>
 </div>
 <div class="mat-padding" fxLayout="column">
@@ -80,7 +96,7 @@
         <mat-label translate>dashboard.public-link</mat-label>
         <input matInput disabled [ngModel]="publicLink">
       </mat-form-field>
-      <button mat-button mat-icon-button style="margin-top: 8px;"
+      <button mat-icon-button style="margin-top: 8px;"
               ngxClipboard
               (cbOnSuccess)="onPublicLinkCopied($event)"
               cbContent="{{ publicLink }}"
@@ -98,6 +114,9 @@
         <mat-error *ngIf="entityForm.get('title').hasError('required')">
           {{ 'dashboard.title-required' | translate }}
         </mat-error>
+        <mat-error *ngIf="entityForm.get('title').hasError('maxlength')">
+          {{ 'dashboard.title-max-length' | translate }}
+        </mat-error>
       </mat-form-field>
       <div formGroupName="configuration" fxLayout="column">
         <mat-form-field class="mat-block">
@@ -105,6 +124,19 @@
           <textarea matInput formControlName="description" rows="2"></textarea>
         </mat-form-field>
       </div>
+      <div translate>dashboard.mobile-app-settings</div>
+      <tb-image-input fxFlex
+                      label="{{'dashboard.image' | translate}}"
+                      maxSizeByte="524288"
+                      formControlName="image">
+      </tb-image-input>
+      <mat-checkbox fxFlex formControlName="mobileHide">
+        {{ 'dashboard.mobile-hide' | translate }}
+      </mat-checkbox>
+      <mat-form-field class="mat-block">
+        <mat-label translate>dashboard.mobile-order</mat-label>
+        <input matInput formControlName="mobileOrder" type="number" step="1">
+      </mat-form-field>
     </fieldset>
   </form>
 </div>

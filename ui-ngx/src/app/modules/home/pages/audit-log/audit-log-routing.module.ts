@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import { RouterModule, Routes } from '@angular/router';
 import { Authority } from '@shared/models/authority.enum';
 import { AuditLogTableComponent } from '@home/components/audit-log/audit-log-table.component';
 
-const routes: Routes = [
+export const auditLogsRoutes: Routes = [
   {
     path: 'auditLogs',
     component: AuditLogTableComponent,
@@ -29,13 +29,22 @@ const routes: Routes = [
       breadcrumb: {
         label: 'audit-log.audit-logs',
         icon: 'track_changes'
-      }
+      },
+      isPage: true
     }
+  }
+];
+
+const routes: Routes = [
+  {
+    path: 'auditLogs',
+    redirectTo: '/security-settings/auditLogs'
   }
 ];
 
 @NgModule({
   imports: [RouterModule.forChild(routes)],
-  exports: [RouterModule]
+  exports: [RouterModule],
+  providers: []
 })
 export class AuditLogRoutingModule { }

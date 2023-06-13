@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,34 @@
  */
 package org.thingsboard.server.common.data.widget;
 
+import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
 import org.thingsboard.server.common.data.BaseData;
+import org.thingsboard.server.common.data.HasName;
 import org.thingsboard.server.common.data.HasTenantId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.WidgetTypeId;
+import org.thingsboard.server.common.data.validation.Length;
+import org.thingsboard.server.common.data.validation.NoXss;
 
 @Data
-public class BaseWidgetType extends BaseData<WidgetTypeId> implements HasTenantId {
+public class BaseWidgetType extends BaseData<WidgetTypeId> implements HasName, HasTenantId {
 
     private static final long serialVersionUID = 8388684344603660756L;
 
+    @ApiModelProperty(position = 3, value = "JSON object with Tenant Id.", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     private TenantId tenantId;
+    @NoXss
+    @Length(fieldName = "bundleAlias")
+    @ApiModelProperty(position = 4, value = "Reference to widget bundle", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     private String bundleAlias;
+    @NoXss
+    @Length(fieldName = "alias")
+    @ApiModelProperty(position = 5, value = "Unique alias that is used in dashboards as a reference widget type", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     private String alias;
+    @NoXss
+    @Length(fieldName = "name")
+    @ApiModelProperty(position = 6, value = "Widget name used in search and UI", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     private String name;
 
     public BaseWidgetType() {
@@ -45,5 +59,20 @@ public class BaseWidgetType extends BaseData<WidgetTypeId> implements HasTenantI
         this.bundleAlias = widgetType.getBundleAlias();
         this.alias = widgetType.getAlias();
         this.name = widgetType.getName();
+    }
+
+    @ApiModelProperty(position = 1, value = "JSON object with the Widget Type Id. " +
+            "Specify this field to update the Widget Type. " +
+            "Referencing non-existing Widget Type Id will cause error. " +
+            "Omit this field to create new Widget Type." )
+    @Override
+    public WidgetTypeId getId() {
+        return super.getId();
+    }
+
+    @ApiModelProperty(position = 2, value = "Timestamp of the Widget Type creation, in milliseconds", example = "1609459200000", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
+    @Override
+    public long getCreatedTime() {
+        return super.getCreatedTime();
     }
 }

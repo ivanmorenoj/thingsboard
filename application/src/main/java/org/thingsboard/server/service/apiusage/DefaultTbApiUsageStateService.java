@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,29 @@
 package org.thingsboard.server.service.apiusage;
 
 import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.ListenableFuture;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.thingsboard.rule.engine.api.MailService;
+import org.thingsboard.server.cluster.TbClusterService;
 import org.thingsboard.server.common.data.ApiFeature;
 import org.thingsboard.server.common.data.ApiUsageRecordKey;
+import org.thingsboard.server.common.data.ApiUsageRecordState;
 import org.thingsboard.server.common.data.ApiUsageState;
-import org.thingsboard.server.common.data.ApiUsageStateMailMessage;
 import org.thingsboard.server.common.data.ApiUsageStateValue;
+import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.Tenant;
 import org.thingsboard.server.common.data.TenantProfile;
 import org.thingsboard.server.common.data.exception.ThingsboardException;
 import org.thingsboard.server.common.data.id.ApiUsageStateId;
+import org.thingsboard.server.common.data.id.CustomerId;
+import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.TenantProfileId;
 import org.thingsboard.server.common.data.kv.BasicTsKvEntry;
@@ -42,8 +48,10 @@ import org.thingsboard.server.common.data.kv.TsKvEntry;
 import org.thingsboard.server.common.data.page.PageDataIterable;
 import org.thingsboard.server.common.data.tenant.profile.TenantProfileConfiguration;
 import org.thingsboard.server.common.data.tenant.profile.TenantProfileData;
+import org.thingsboard.server.common.msg.notification.trigger.ApiUsageLimitTrigger;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.common.msg.queue.TbCallback;
+import org.thingsboard.server.common.msg.queue.TopicPartitionInfo;
 import org.thingsboard.server.common.msg.tools.SchedulerUtils;
 import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
 import org.thingsboard.server.dao.tenant.TenantService;
@@ -52,17 +60,20 @@ import org.thingsboard.server.dao.usagerecord.ApiUsageStateService;
 import org.thingsboard.server.gen.transport.TransportProtos.ToUsageStatsServiceMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.UsageStatsKVProto;
 import org.thingsboard.server.queue.common.TbProtoQueueMsg;
-import org.thingsboard.server.queue.discovery.PartitionChangeEvent;
 import org.thingsboard.server.queue.discovery.PartitionService;
-import org.thingsboard.server.queue.discovery.TbApplicationEventListener;
-import org.thingsboard.server.queue.scheduler.SchedulerComponent;
-import org.thingsboard.server.service.queue.TbClusterService;
+import org.thingsboard.server.queue.notification.NotificationRuleProcessor;
+import org.thingsboard.server.service.apiusage.BaseApiUsageState.StatsCalculationResult;
+import org.thingsboard.server.service.executors.DbCallbackExecutorService;
+import org.thingsboard.server.service.mail.MailExecutorService;
+import org.thingsboard.server.service.partition.AbstractPartitionBasedService;
 import org.thingsboard.server.service.telemetry.InternalTelemetryService;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -70,9 +81,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -80,7 +88,8 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-public class DefaultTbApiUsageStateService extends TbApplicationEventListener<PartitionChangeEvent> implements TbApiUsageStateService {
+@RequiredArgsConstructor
+public class DefaultTbApiUsageStateService extends AbstractPartitionBasedService<EntityId> implements TbApiUsageStateService {
 
     public static final String HOURLY = "Hourly";
     public static final FutureCallback<Integer> VOID_CALLBACK = new FutureCallback<Integer>() {
@@ -97,18 +106,22 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
     private final TenantService tenantService;
     private final TimeseriesService tsService;
     private final ApiUsageStateService apiUsageStateService;
-    private final SchedulerComponent scheduler;
     private final TbTenantProfileCache tenantProfileCache;
     private final MailService mailService;
+    private final NotificationRuleProcessor notificationRuleProcessor;
+    private final DbCallbackExecutorService dbExecutor;
+    private final MailExecutorService mailExecutor;
 
     @Lazy
     @Autowired
     private InternalTelemetryService tsWsService;
 
-    // Tenants that should be processed on this server
-    private final Map<TenantId, TenantApiUsageState> myTenantStates = new ConcurrentHashMap<>();
-    // Tenants that should be processed on other servers
-    private final Map<TenantId, ApiUsageState> otherTenantStates = new ConcurrentHashMap<>();
+    // Entities that should be processed on this server
+    final Map<EntityId, BaseApiUsageState> myUsageStates = new ConcurrentHashMap<>();
+    // Entities that should be processed on other servers
+    final Map<EntityId, ApiUsageState> otherUsageStates = new ConcurrentHashMap<>();
+
+    final Set<EntityId> deletedEntities = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     @Value("${usage.stats.report.enabled:true}")
     private boolean enabled;
@@ -116,112 +129,114 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
     @Value("${usage.stats.check.cycle:60000}")
     private long nextCycleCheckInterval;
 
+    @Value("${usage.stats.gauge_report_interval:180000}")
+    private long gaugeReportInterval;
+
     private final Lock updateLock = new ReentrantLock();
-
-    private final ExecutorService mailExecutor;
-
-    public DefaultTbApiUsageStateService(TbClusterService clusterService,
-                                         PartitionService partitionService,
-                                         TenantService tenantService,
-                                         TimeseriesService tsService,
-                                         ApiUsageStateService apiUsageStateService,
-                                         SchedulerComponent scheduler,
-                                         TbTenantProfileCache tenantProfileCache, MailService mailService) {
-        this.clusterService = clusterService;
-        this.partitionService = partitionService;
-        this.tenantService = tenantService;
-        this.tsService = tsService;
-        this.apiUsageStateService = apiUsageStateService;
-        this.scheduler = scheduler;
-        this.tenantProfileCache = tenantProfileCache;
-        this.mailService = mailService;
-        this.mailExecutor = Executors.newSingleThreadExecutor();
-    }
 
     @PostConstruct
     public void init() {
+        super.init();
         if (enabled) {
             log.info("Starting api usage service.");
-            scheduler.scheduleAtFixedRate(this::checkStartOfNextCycle, nextCycleCheckInterval, nextCycleCheckInterval, TimeUnit.MILLISECONDS);
+            scheduledExecutor.scheduleAtFixedRate(this::checkStartOfNextCycle, nextCycleCheckInterval, nextCycleCheckInterval, TimeUnit.MILLISECONDS);
             log.info("Started api usage service.");
         }
     }
 
     @Override
-    public void process(TbProtoQueueMsg<ToUsageStatsServiceMsg> msg, TbCallback callback) {
-        ToUsageStatsServiceMsg statsMsg = msg.getValue();
-        TenantId tenantId = new TenantId(new UUID(statsMsg.getTenantIdMSB(), statsMsg.getTenantIdLSB()));
-
-        if (tenantProfileCache.get(tenantId) == null) {
-            return;
-        }
-
-        TenantApiUsageState tenantState;
-        List<TsKvEntry> updatedEntries;
-        Map<ApiFeature, ApiUsageStateValue> result;
-        updateLock.lock();
-        try {
-            tenantState = getOrFetchState(tenantId);
-            long ts = tenantState.getCurrentCycleTs();
-            long hourTs = tenantState.getCurrentHourTs();
-            long newHourTs = SchedulerUtils.getStartOfCurrentHour();
-            if (newHourTs != hourTs) {
-                tenantState.setHour(newHourTs);
-            }
-            updatedEntries = new ArrayList<>(ApiUsageRecordKey.values().length);
-            Set<ApiFeature> apiFeatures = new HashSet<>();
-            for (UsageStatsKVProto kvProto : statsMsg.getValuesList()) {
-                ApiUsageRecordKey recordKey = ApiUsageRecordKey.valueOf(kvProto.getKey());
-                long newValue = tenantState.add(recordKey, kvProto.getValue());
-                updatedEntries.add(new BasicTsKvEntry(ts, new LongDataEntry(recordKey.getApiCountKey(), newValue)));
-                long newHourlyValue = tenantState.addToHourly(recordKey, kvProto.getValue());
-                updatedEntries.add(new BasicTsKvEntry(newHourTs, new LongDataEntry(recordKey.getApiCountKey() + HOURLY, newHourlyValue)));
-                apiFeatures.add(recordKey.getApiFeature());
-            }
-            result = tenantState.checkStateUpdatedDueToThreshold(apiFeatures);
-        } finally {
-            updateLock.unlock();
-        }
-        tsWsService.saveAndNotifyInternal(tenantId, tenantState.getApiUsageState().getId(), updatedEntries, VOID_CALLBACK);
-        if (!result.isEmpty()) {
-            persistAndNotify(tenantState, result);
-        }
-        callback.onSuccess();
+    protected String getServiceName() {
+        return "API Usage";
     }
 
     @Override
-    protected void onTbApplicationEvent(PartitionChangeEvent partitionChangeEvent) {
-        if (partitionChangeEvent.getServiceType().equals(ServiceType.TB_CORE)) {
-            myTenantStates.entrySet().removeIf(entry -> !partitionService.resolve(ServiceType.TB_CORE, entry.getKey(), entry.getKey()).isMyPartition());
-            otherTenantStates.entrySet().removeIf(entry -> partitionService.resolve(ServiceType.TB_CORE, entry.getKey(), entry.getKey()).isMyPartition());
-            initStatesFromDataBase();
+    protected String getSchedulerExecutorName() {
+        return "api-usage-scheduled";
+    }
+
+    @Override
+    public void process(TbProtoQueueMsg<ToUsageStatsServiceMsg> msg, TbCallback callback) {
+        ToUsageStatsServiceMsg statsMsg = msg.getValue();
+
+        TenantId tenantId = TenantId.fromUUID(new UUID(statsMsg.getTenantIdMSB(), statsMsg.getTenantIdLSB()));
+        EntityId ownerId;
+        if (statsMsg.getCustomerIdMSB() != 0 && statsMsg.getCustomerIdLSB() != 0) {
+            ownerId = new CustomerId(new UUID(statsMsg.getCustomerIdMSB(), statsMsg.getCustomerIdLSB()));
+        } else {
+            ownerId = tenantId;
+        }
+
+        processEntityUsageStats(tenantId, ownerId, statsMsg.getValuesList(), statsMsg.getServiceId());
+        callback.onSuccess();
+    }
+
+    private void processEntityUsageStats(TenantId tenantId, EntityId ownerId, List<UsageStatsKVProto> values, String serviceId) {
+        if (deletedEntities.contains(ownerId)) return;
+
+        BaseApiUsageState usageState;
+        List<TsKvEntry> updatedEntries;
+        Map<ApiFeature, ApiUsageStateValue> result;
+
+        updateLock.lock();
+        try {
+            usageState = getOrFetchState(tenantId, ownerId);
+            long ts = usageState.getCurrentCycleTs();
+            long hourTs = usageState.getCurrentHourTs();
+            long newHourTs = SchedulerUtils.getStartOfCurrentHour();
+            if (newHourTs != hourTs) {
+                usageState.setHour(newHourTs);
+            }
+            updatedEntries = new ArrayList<>(ApiUsageRecordKey.values().length);
+            Set<ApiFeature> apiFeatures = new HashSet<>();
+            for (UsageStatsKVProto statsItem : values) {
+                ApiUsageRecordKey recordKey = ApiUsageRecordKey.valueOf(statsItem.getKey());
+
+                StatsCalculationResult calculationResult = usageState.calculate(recordKey, statsItem.getValue(), serviceId);
+                if (calculationResult.isValueChanged()) {
+                    long newValue = calculationResult.getNewValue();
+                    updatedEntries.add(new BasicTsKvEntry(ts, new LongDataEntry(recordKey.getApiCountKey(), newValue)));
+                }
+                if (calculationResult.isHourlyValueChanged()) {
+                    long newHourlyValue = calculationResult.getNewHourlyValue();
+                    updatedEntries.add(new BasicTsKvEntry(newHourTs, new LongDataEntry(recordKey.getApiCountKey() + HOURLY, newHourlyValue)));
+                }
+                if (recordKey.getApiFeature() != null) {
+                    apiFeatures.add(recordKey.getApiFeature());
+                }
+            }
+            if (usageState.getEntityType() == EntityType.TENANT && !usageState.getEntityId().equals(TenantId.SYS_TENANT_ID)) {
+                result = ((TenantApiUsageState) usageState).checkStateUpdatedDueToThreshold(apiFeatures);
+            } else {
+                result = Collections.emptyMap();
+            }
+        } finally {
+            updateLock.unlock();
+        }
+        tsWsService.saveAndNotifyInternal(tenantId, usageState.getApiUsageState().getId(), updatedEntries, VOID_CALLBACK);
+        if (!result.isEmpty()) {
+            persistAndNotify(usageState, result);
         }
     }
 
     @Override
     public ApiUsageState getApiUsageState(TenantId tenantId) {
-        TenantApiUsageState tenantState = myTenantStates.get(tenantId);
+        TenantApiUsageState tenantState = (TenantApiUsageState) myUsageStates.get(tenantId);
         if (tenantState != null) {
             return tenantState.getApiUsageState();
         } else {
-            ApiUsageState state = otherTenantStates.get(tenantId);
+            ApiUsageState state = otherUsageStates.get(tenantId);
             if (state != null) {
                 return state;
             } else {
                 if (partitionService.resolve(ServiceType.TB_CORE, tenantId, tenantId).isMyPartition()) {
-                    return getOrFetchState(tenantId).getApiUsageState();
+                    return getOrFetchState(tenantId, tenantId).getApiUsageState();
                 } else {
-                    updateLock.lock();
-                    try {
-                        state = otherTenantStates.get(tenantId);
-                        if (state == null) {
-                            state = apiUsageStateService.findTenantApiUsageState(tenantId);
-                            if (state != null) {
-                                otherTenantStates.put(tenantId, state);
-                            }
+                    state = otherUsageStates.get(tenantId);
+                    if (state == null) {
+                        state = apiUsageStateService.findTenantApiUsageState(tenantId);
+                        if (state != null) {
+                            otherUsageStates.put(tenantId, state);
                         }
-                    } finally {
-                        updateLock.unlock();
                     }
                     return state;
                 }
@@ -231,7 +246,7 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
 
     @Override
     public void onApiUsageStateUpdate(TenantId tenantId) {
-        otherTenantStates.remove(tenantId);
+        otherUsageStates.remove(tenantId);
     }
 
     @Override
@@ -240,11 +255,14 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         TenantProfile tenantProfile = tenantProfileCache.get(tenantProfileId);
         updateLock.lock();
         try {
-            myTenantStates.values().forEach(state -> {
-                if (tenantProfile.getId().equals(state.getTenantProfileId())) {
-                    updateTenantState(state, tenantProfile);
-                }
-            });
+            myUsageStates.values().stream()
+                    .filter(state -> state.getEntityType() == EntityType.TENANT)
+                    .map(state -> (TenantApiUsageState) state)
+                    .forEach(state -> {
+                        if (tenantProfile.getId().equals(state.getTenantProfileId())) {
+                            updateTenantState(state, tenantProfile);
+                        }
+                    });
         } finally {
             updateLock.unlock();
         }
@@ -256,7 +274,7 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         TenantProfile tenantProfile = tenantProfileCache.get(tenantId);
         updateLock.lock();
         try {
-            TenantApiUsageState state = myTenantStates.get(tenantId);
+            TenantApiUsageState state = (TenantApiUsageState) myUsageStates.get(tenantId);
             if (state != null && !state.getTenantProfileId().equals(tenantProfile.getId())) {
                 updateTenantState(state, tenantProfile);
             }
@@ -277,6 +295,18 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
                 oldProfileData.getConfiguration(), profile.getProfileData().getConfiguration());
     }
 
+    private void addEntityState(TopicPartitionInfo tpi, BaseApiUsageState state) {
+        EntityId entityId = state.getEntityId();
+        Set<EntityId> entityIds = partitionedEntities.get(tpi);
+        if (entityIds != null) {
+            entityIds.add(entityId);
+            myUsageStates.put(entityId, state);
+        } else {
+            log.debug("[{}] belongs to external partition {}", entityId, tpi.getFullTopicName());
+            throw new RuntimeException(entityId.getEntityType() + " belongs to external partition " + tpi.getFullTopicName() + "!");
+        }
+    }
+
     private void updateProfileThresholds(TenantId tenantId, ApiUsageStateId id,
                                          TenantProfileConfiguration oldData, TenantProfileConfiguration newData) {
         long ts = System.currentTimeMillis();
@@ -293,40 +323,62 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         }
     }
 
-    private void persistAndNotify(TenantApiUsageState state, Map<ApiFeature, ApiUsageStateValue> result) {
-        log.info("[{}] Detected update of the API state: {}", state.getTenantId(), result);
+    public void onTenantDelete(TenantId tenantId) {
+        deletedEntities.add(tenantId);
+        myUsageStates.remove(tenantId);
+        otherUsageStates.remove(tenantId);
+    }
+
+    @Override
+    public void onCustomerDelete(CustomerId customerId) {
+        deletedEntities.add(customerId);
+        myUsageStates.remove(customerId);
+    }
+
+    @Override
+    protected void cleanupEntityOnPartitionRemoval(EntityId entityId) {
+        myUsageStates.remove(entityId);
+    }
+
+    private void persistAndNotify(BaseApiUsageState state, Map<ApiFeature, ApiUsageStateValue> result) {
+        log.info("[{}] Detected update of the API state for {}: {}", state.getEntityId(), state.getEntityType(), result);
         apiUsageStateService.update(state.getApiUsageState());
         clusterService.onApiStateChange(state.getApiUsageState(), null);
         long ts = System.currentTimeMillis();
         List<TsKvEntry> stateTelemetry = new ArrayList<>();
-        result.forEach(((apiFeature, aState) -> stateTelemetry.add(new BasicTsKvEntry(ts, new StringDataEntry(apiFeature.getApiStateKey(), aState.name())))));
+        result.forEach((apiFeature, aState) -> stateTelemetry.add(new BasicTsKvEntry(ts, new StringDataEntry(apiFeature.getApiStateKey(), aState.name()))));
         tsWsService.saveAndNotifyInternal(state.getTenantId(), state.getApiUsageState().getId(), stateTelemetry, VOID_CALLBACK);
 
-        String email = tenantService.findTenantById(state.getTenantId()).getEmail();
-
-        if (StringUtils.isNotEmpty(email)) {
+        if (state.getEntityType() == EntityType.TENANT && !state.getEntityId().equals(TenantId.SYS_TENANT_ID)) {
+            String email = tenantService.findTenantById(state.getTenantId()).getEmail();
             result.forEach((apiFeature, stateValue) -> {
-                mailExecutor.submit(() -> {
-                    try {
-                        mailService.sendApiFeatureStateEmail(apiFeature, stateValue, email, createStateMailMessage(state, apiFeature, stateValue));
-                    } catch (ThingsboardException e) {
-                        log.warn("[{}] Can't send update of the API state to tenant with provided email [{}]", state.getTenantId(), email, e);
-                    }
-                });
+                ApiUsageRecordState recordState = createApiUsageRecordState((TenantApiUsageState) state, apiFeature, stateValue);
+                notificationRuleProcessor.process(ApiUsageLimitTrigger.builder()
+                        .tenantId(state.getTenantId())
+                        .state(recordState)
+                        .status(stateValue)
+                        .build());
+                if (StringUtils.isNotEmpty(email)) {
+                    mailExecutor.submit(() -> {
+                        try {
+                            mailService.sendApiFeatureStateEmail(apiFeature, stateValue, email, recordState);
+                        } catch (ThingsboardException e) {
+                            log.warn("[{}] Can't send update of the API state to tenant with provided email [{}]", state.getTenantId(), email, e);
+                        }
+                    });
+                }
             });
-        } else {
-            log.warn("[{}] Can't send update of the API state to tenant with empty email!", state.getTenantId());
         }
     }
 
-    private ApiUsageStateMailMessage createStateMailMessage(TenantApiUsageState state, ApiFeature apiFeature, ApiUsageStateValue stateValue) {
+    private ApiUsageRecordState createApiUsageRecordState(TenantApiUsageState state, ApiFeature apiFeature, ApiUsageStateValue stateValue) {
         StateChecker checker = getStateChecker(stateValue);
         for (ApiUsageRecordKey apiUsageRecordKey : ApiUsageRecordKey.getKeys(apiFeature)) {
             long threshold = state.getProfileThreshold(apiUsageRecordKey);
             long warnThreshold = state.getProfileWarnThreshold(apiUsageRecordKey);
             long value = state.get(apiUsageRecordKey);
             if (checker.check(threshold, warnThreshold, value)) {
-                return new ApiUsageStateMailMessage(apiUsageRecordKey, threshold, value);
+                return new ApiUsageRecordState(apiFeature, apiUsageRecordKey, threshold, value);
             }
         }
         return null;
@@ -338,8 +390,13 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         } else if (ApiUsageStateValue.WARNING.equals(stateValue)) {
             return (t, wt, v) -> v < t && v >= wt;
         } else {
-            return (t, wt, v) -> v >= t;
+            return (t, wt, v) -> t > 0 && v >= t;
         }
+    }
+
+    @Override
+    public ApiUsageState findApiUsageStateById(TenantId tenantId, ApiUsageStateId id) {
+        return apiUsageStateService.findApiUsageStateById(tenantId, id);
     }
 
     private interface StateChecker {
@@ -350,12 +407,14 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         updateLock.lock();
         try {
             long now = System.currentTimeMillis();
-            myTenantStates.values().forEach(state -> {
+            myUsageStates.values().forEach(state -> {
                 if ((state.getNextCycleTs() < now) && (now - state.getNextCycleTs() < TimeUnit.HOURS.toMillis(1))) {
-                    TenantId tenantId = state.getTenantId();
                     state.setCycles(state.getNextCycleTs(), SchedulerUtils.getStartOfNextNextMonth());
                     saveNewCounts(state, Arrays.asList(ApiUsageRecordKey.values()));
-                    updateTenantState(state, tenantProfileCache.get(tenantId));
+                    if (state.getEntityType() == EntityType.TENANT && !state.getEntityId().equals(TenantId.SYS_TENANT_ID)) {
+                        TenantId tenantId = state.getTenantId();
+                        updateTenantState((TenantApiUsageState) state, tenantProfileCache.get(tenantId));
+                    }
                 }
             });
         } finally {
@@ -363,7 +422,7 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         }
     }
 
-    private void saveNewCounts(TenantApiUsageState state, List<ApiUsageRecordKey> keys) {
+    private void saveNewCounts(BaseApiUsageState state, List<ApiUsageRecordKey> keys) {
         List<TsKvEntry> counts = keys.stream()
                 .map(key -> new BasicTsKvEntry(state.getCurrentCycleTs(), new LongDataEntry(key.getApiCountKey(), 0L)))
                 .collect(Collectors.toList());
@@ -371,95 +430,124 @@ public class DefaultTbApiUsageStateService extends TbApplicationEventListener<Pa
         tsWsService.saveAndNotifyInternal(state.getTenantId(), state.getApiUsageState().getId(), counts, VOID_CALLBACK);
     }
 
-    private TenantApiUsageState getOrFetchState(TenantId tenantId) {
-        TenantApiUsageState tenantState = myTenantStates.get(tenantId);
-        if (tenantState == null) {
-            ApiUsageState dbStateEntity = apiUsageStateService.findTenantApiUsageState(tenantId);
-            if (dbStateEntity == null) {
-                try {
-                    dbStateEntity = apiUsageStateService.createDefaultApiUsageState(tenantId);
-                } catch (Exception e) {
-                    dbStateEntity = apiUsageStateService.findTenantApiUsageState(tenantId);
-                }
-            }
-            TenantProfile tenantProfile = tenantProfileCache.get(tenantId);
-            tenantState = new TenantApiUsageState(tenantProfile, dbStateEntity);
-            List<ApiUsageRecordKey> newCounts = new ArrayList<>();
+    BaseApiUsageState getOrFetchState(TenantId tenantId, EntityId ownerId) {
+        if (ownerId == null || ownerId.isNullUid()) {
+            ownerId = tenantId;
+        }
+        BaseApiUsageState state = myUsageStates.get(ownerId);
+        if (state != null) {
+            return state;
+        }
+
+        ApiUsageState storedState = apiUsageStateService.findApiUsageStateByEntityId(ownerId);
+        if (storedState == null) {
             try {
-                List<TsKvEntry> dbValues = tsService.findAllLatest(tenantId, dbStateEntity.getId()).get();
-                for (ApiUsageRecordKey key : ApiUsageRecordKey.values()) {
-                    boolean cycleEntryFound = false;
-                    boolean hourlyEntryFound = false;
-                    for (TsKvEntry tsKvEntry : dbValues) {
-                        if (tsKvEntry.getKey().equals(key.getApiCountKey())) {
-                            cycleEntryFound = true;
-
-                            boolean oldCount = tsKvEntry.getTs() == tenantState.getCurrentCycleTs();
-                            tenantState.put(key, oldCount ? tsKvEntry.getLongValue().get() : 0L);
-
-                            if (!oldCount) {
-                                newCounts.add(key);
-                            }
-                        } else if (tsKvEntry.getKey().equals(key.getApiCountKey() + HOURLY)) {
-                            hourlyEntryFound = true;
-                            tenantState.putHourly(key, tsKvEntry.getTs() == tenantState.getCurrentHourTs() ? tsKvEntry.getLongValue().get() : 0L);
-                        }
-                        if (cycleEntryFound && hourlyEntryFound) {
-                            break;
-                        }
-                    }
-                }
-                log.debug("[{}] Initialized state: {}", tenantId, dbStateEntity);
-                myTenantStates.put(tenantId, tenantState);
-                saveNewCounts(tenantState, newCounts);
-            } catch (InterruptedException | ExecutionException e) {
-                log.warn("[{}] Failed to fetch api usage state from db.", tenantId, e);
+                storedState = apiUsageStateService.createDefaultApiUsageState(tenantId, ownerId);
+            } catch (Exception e) {
+                storedState = apiUsageStateService.findApiUsageStateByEntityId(ownerId);
             }
         }
-        return tenantState;
+        if (ownerId.getEntityType() == EntityType.TENANT) {
+            if (!ownerId.equals(TenantId.SYS_TENANT_ID)) {
+                state = new TenantApiUsageState(tenantProfileCache.get((TenantId) ownerId), storedState);
+            } else {
+                state = new TenantApiUsageState(storedState);
+            }
+        } else {
+            state = new CustomerApiUsageState(storedState);
+        }
+
+        List<ApiUsageRecordKey> newCounts = new ArrayList<>();
+        try {
+            List<TsKvEntry> dbValues = tsService.findAllLatest(tenantId, storedState.getId()).get();
+            for (ApiUsageRecordKey key : ApiUsageRecordKey.values()) {
+                boolean cycleEntryFound = false;
+                boolean hourlyEntryFound = false;
+                for (TsKvEntry tsKvEntry : dbValues) {
+                    if (tsKvEntry.getKey().equals(key.getApiCountKey())) {
+                        cycleEntryFound = true;
+
+                        boolean oldCount = tsKvEntry.getTs() == state.getCurrentCycleTs();
+                        state.set(key, oldCount ? tsKvEntry.getLongValue().get() : 0L);
+
+                        if (!oldCount) {
+                            newCounts.add(key);
+                        }
+                    } else if (tsKvEntry.getKey().equals(key.getApiCountKey() + HOURLY)) {
+                        hourlyEntryFound = true;
+                        state.setHourly(key, tsKvEntry.getTs() == state.getCurrentHourTs() ? tsKvEntry.getLongValue().get() : 0L);
+                    }
+                    if (cycleEntryFound && hourlyEntryFound) {
+                        break;
+                    }
+                }
+            }
+            state.setGaugeReportInterval(gaugeReportInterval);
+            log.debug("[{}] Initialized state: {}", ownerId, storedState);
+            TopicPartitionInfo tpi = partitionService.resolve(ServiceType.TB_CORE, tenantId, ownerId);
+            if (tpi.isMyPartition()) {
+                addEntityState(tpi, state);
+            } else {
+                otherUsageStates.put(ownerId, state.getApiUsageState());
+            }
+            saveNewCounts(state, newCounts);
+        } catch (InterruptedException | ExecutionException e) {
+            log.warn("[{}] Failed to fetch api usage state from db.", tenantId, e);
+        }
+
+        return state;
     }
 
-    private void initStatesFromDataBase() {
+    @Override
+    protected void onRepartitionEvent() {
+        otherUsageStates.entrySet().removeIf(entry ->
+                partitionService.resolve(ServiceType.TB_CORE, entry.getValue().getTenantId(), entry.getKey()).isMyPartition());
+        updateLock.lock();
+        try {
+            myUsageStates.values().forEach(BaseApiUsageState::onRepartitionEvent);
+        } finally {
+            updateLock.unlock();
+        }
+    }
+
+    @Override
+    protected Map<TopicPartitionInfo, List<ListenableFuture<?>>> onAddedPartitions(Set<TopicPartitionInfo> addedPartitions) {
+        var result = new HashMap<TopicPartitionInfo, List<ListenableFuture<?>>>();
         try {
             log.info("Initializing tenant states.");
             updateLock.lock();
             try {
-                ExecutorService tmpInitExecutor = Executors.newWorkStealingPool(20);
-                try {
-                    PageDataIterable<Tenant> tenantIterator = new PageDataIterable<>(tenantService::findTenants, 1024);
-                    List<Future<?>> futures = new ArrayList<>();
-                    for (Tenant tenant : tenantIterator) {
-                        if (!myTenantStates.containsKey(tenant.getId()) && partitionService.resolve(ServiceType.TB_CORE, tenant.getId(), tenant.getId()).isMyPartition()) {
+                PageDataIterable<Tenant> tenantIterator = new PageDataIterable<>(tenantService::findTenants, 1024);
+                for (Tenant tenant : tenantIterator) {
+                    TopicPartitionInfo tpi = partitionService.resolve(ServiceType.TB_CORE, tenant.getId(), tenant.getId());
+                    if (addedPartitions.contains(tpi)) {
+                        if (!myUsageStates.containsKey(tenant.getId()) && tpi.isMyPartition()) {
                             log.debug("[{}] Initializing tenant state.", tenant.getId());
-                            futures.add(tmpInitExecutor.submit(() -> {
+                            result.computeIfAbsent(tpi, tmp -> new ArrayList<>()).add(dbExecutor.submit(() -> {
                                 try {
-                                    updateTenantState(getOrFetchState(tenant.getId()), tenantProfileCache.get(tenant.getTenantProfileId()));
+                                    updateTenantState((TenantApiUsageState) getOrFetchState(tenant.getId(), tenant.getId()), tenantProfileCache.get(tenant.getTenantProfileId()));
                                     log.debug("[{}] Initialized tenant state.", tenant.getId());
                                 } catch (Exception e) {
                                     log.warn("[{}] Failed to initialize tenant API state", tenant.getId(), e);
                                 }
+                                return null;
                             }));
                         }
+                    } else {
+                        log.debug("[{}][{}] Tenant doesn't belong to current partition. tpi [{}]", tenant.getName(), tenant.getId(), tpi);
                     }
-                    for (Future<?> future : futures) {
-                        future.get();
-                    }
-                } finally {
-                    tmpInitExecutor.shutdownNow();
                 }
             } finally {
                 updateLock.unlock();
             }
-            log.info("Initialized tenant states.");
         } catch (Exception e) {
             log.warn("Unknown failure", e);
         }
+        return result;
     }
 
     @PreDestroy
     private void destroy() {
-        if (mailExecutor != null) {
-            mailExecutor.shutdownNow();
-        }
+        super.stop();
     }
 }

@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 /// limitations under the License.
 ///
 
-import { Component, Inject } from '@angular/core';
+import { ChangeDetectorRef, Component, Inject } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { EntityComponent } from '../../components/entity/entity.component';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import {
   createDeviceConfiguration,
   createDeviceTransportConfiguration, DeviceCredentials,
@@ -34,6 +34,9 @@ import { ActionNotificationShow } from '@core/notification/notification.actions'
 import { TranslateService } from '@ngx-translate/core';
 import { EntityTableConfig } from '@home/models/entity/entities-table-config.models';
 import { Subject } from 'rxjs';
+import { OtaUpdateType } from '@shared/models/ota-package.models';
+import { distinctUntilChanged } from 'rxjs/operators';
+import { getEntityDetailsPageURL } from '@core/utils';
 
 @Component({
   selector: 'tb-device',
@@ -46,14 +49,17 @@ export class DeviceComponent extends EntityComponent<DeviceInfo> {
 
   deviceCredentials$: Subject<DeviceCredentials>;
 
-  deviceScope: 'tenant' | 'customer' | 'customer_user';
+  deviceScope: 'tenant' | 'customer' | 'customer_user' | 'edge' | 'edge_customer_user';
+
+  otaUpdateType = OtaUpdateType;
 
   constructor(protected store: Store<AppState>,
               protected translate: TranslateService,
               @Inject('entity') protected entityValue: DeviceInfo,
               @Inject('entitiesTableConfig') protected entitiesTableConfigValue: EntityTableConfig<DeviceInfo>,
-              public fb: FormBuilder) {
-    super(store, fb, entityValue, entitiesTableConfigValue);
+              public fb: UntypedFormBuilder,
+              protected cd: ChangeDetectorRef) {
+    super(store, fb, entityValue, entitiesTableConfigValue, cd);
   }
 
   ngOnInit() {
@@ -74,12 +80,14 @@ export class DeviceComponent extends EntityComponent<DeviceInfo> {
     return entity && entity.customerId && entity.customerId.id !== NULL_UUID;
   }
 
-  buildForm(entity: DeviceInfo): FormGroup {
-    return this.fb.group(
+  buildForm(entity: DeviceInfo): UntypedFormGroup {
+    const form = this.fb.group(
       {
-        name: [entity ? entity.name : '', [Validators.required]],
+        name: [entity ? entity.name : '', [Validators.required, Validators.maxLength(255)]],
         deviceProfileId: [entity ? entity.deviceProfileId : null, [Validators.required]],
-        label: [entity ? entity.label : ''],
+        firmwareId: [entity ? entity.firmwareId : null],
+        softwareId: [entity ? entity.softwareId : null],
+        label: [entity ? entity.label : '', [Validators.maxLength(255)]],
         deviceData: [entity ? entity.deviceData : null, [Validators.required]],
         additionalInfo: this.fb.group(
           {
@@ -90,21 +98,33 @@ export class DeviceComponent extends EntityComponent<DeviceInfo> {
         )
       }
     );
+    form.get('deviceProfileId').valueChanges.pipe(
+      distinctUntilChanged((prev, curr) => prev?.id === curr?.id)
+    ).subscribe(profileId => {
+      if (profileId && this.isEdit) {
+        this.entityForm.patchValue({
+          firmwareId: null,
+          softwareId: null
+        }, {emitEvent: false});
+      }
+    });
+    return form;
   }
 
   updateForm(entity: DeviceInfo) {
-    this.entityForm.patchValue({name: entity.name});
-    this.entityForm.patchValue({deviceProfileId: entity.deviceProfileId});
-    this.entityForm.patchValue({label: entity.label});
-    this.entityForm.patchValue({deviceData: entity.deviceData});
     this.entityForm.patchValue({
-      additionalInfo:
-        {
-          gateway: entity.additionalInfo ? entity.additionalInfo.gateway : false,
-          overwriteActivityTime: entity.additionalInfo ? entity.additionalInfo.overwriteActivityTime : false
-        }
+      name: entity.name,
+      deviceProfileId: entity.deviceProfileId,
+      firmwareId: entity.firmwareId,
+      softwareId: entity.softwareId,
+      label: entity.label,
+      deviceData: entity.deviceData,
+      additionalInfo: {
+        gateway: entity.additionalInfo ? entity.additionalInfo.gateway : false,
+        overwriteActivityTime: entity.additionalInfo ? entity.additionalInfo.overwriteActivityTime : false,
+        description: entity.additionalInfo ? entity.additionalInfo.description : ''
+      }
     });
-    this.entityForm.patchValue({additionalInfo: {description: entity.additionalInfo ? entity.additionalInfo.description : ''}});
   }
 
 
@@ -120,7 +140,7 @@ export class DeviceComponent extends EntityComponent<DeviceInfo> {
   }
 
   onDeviceProfileUpdated() {
-    this.entitiesTableConfig.table.updateData(false);
+    this.entitiesTableConfig.updateData(false);
   }
 
   onDeviceProfileChanged(deviceProfile: DeviceProfileInfo) {

@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 -->
 <form [formGroup]="twilioSmsProviderConfigurationFormGroup" style="padding-bottom: 16px;">
-  <mat-form-field class="mat-block">
+  <mat-form-field class="mat-block" subscriptSizing="dynamic">
     <mat-label translate>admin.number-from</mat-label>
     <input type="tel" required [pattern]="phoneNumberPatternTwilio" matInput formControlName="numberFrom">
     <mat-error *ngIf="twilioSmsProviderConfigurationFormGroup.get('numberFrom').hasError('required')">
@@ -37,6 +37,7 @@
   <mat-form-field class="mat-block">
     <mat-label translate>admin.twilio-account-token</mat-label>
     <input required type="password" autocomplete="new-password" matInput formControlName="accountToken">
+    <tb-toggle-password matSuffix></tb-toggle-password>
     <mat-error *ngIf="twilioSmsProviderConfigurationFormGroup.get('accountToken').hasError('required')">
       {{ 'admin.twilio-account-token-required' | translate }}
     </mat-error>

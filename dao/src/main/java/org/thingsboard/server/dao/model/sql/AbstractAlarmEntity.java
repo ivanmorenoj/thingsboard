@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,14 +21,15 @@ import lombok.EqualsAndHashCode;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.TypeDef;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.alarm.Alarm;
 import org.thingsboard.server.common.data.alarm.AlarmSeverity;
-import org.thingsboard.server.common.data.alarm.AlarmStatus;
 import org.thingsboard.server.common.data.id.AlarmId;
+import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.EntityIdFactory;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.dao.model.BaseEntity;
 import org.thingsboard.server.dao.model.BaseSqlEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
@@ -42,16 +43,22 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.UUID;
 
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ACKNOWLEDGED_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ACK_TS_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ASSIGNEE_ID_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ASSIGN_TS_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_CLEARED_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_CLEAR_TS_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_CUSTOMER_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_END_TS_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ORIGINATOR_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_ORIGINATOR_TYPE_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_PROPAGATE_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_PROPAGATE_RELATION_TYPES;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_PROPAGATE_TO_OWNER_PROPERTY;
+import static org.thingsboard.server.dao.model.ModelConstants.ALARM_PROPAGATE_TO_TENANT_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_SEVERITY_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_START_TS_PROPERTY;
-import static org.thingsboard.server.dao.model.ModelConstants.ALARM_STATUS_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_TENANT_ID_PROPERTY;
 import static org.thingsboard.server.dao.model.ModelConstants.ALARM_TYPE_PROPERTY;
 
@@ -63,6 +70,9 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
 
     @Column(name = ALARM_TENANT_ID_PROPERTY)
     private UUID tenantId;
+
+    @Column(name = ALARM_CUSTOMER_ID_PROPERTY)
+    private UUID customerId;
 
     @Column(name = ALARM_ORIGINATOR_ID_PROPERTY)
     private UUID originatorId;
@@ -77,9 +87,9 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
     @Column(name = ALARM_SEVERITY_PROPERTY)
     private AlarmSeverity severity;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = ALARM_STATUS_PROPERTY)
-    private AlarmStatus status;
+    @Type(type="pg-uuid")
+    @Column(name = ALARM_ASSIGNEE_ID_PROPERTY)
+    private UUID assigneeId;
 
     @Column(name = ALARM_START_TS_PROPERTY)
     private Long startTs;
@@ -87,18 +97,33 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
     @Column(name = ALARM_END_TS_PROPERTY)
     private Long endTs;
 
+    @Column(name = ALARM_ACKNOWLEDGED_PROPERTY)
+    private boolean acknowledged;
+
     @Column(name = ALARM_ACK_TS_PROPERTY)
     private Long ackTs;
+
+    @Column(name = ALARM_CLEARED_PROPERTY)
+    private boolean cleared;
 
     @Column(name = ALARM_CLEAR_TS_PROPERTY)
     private Long clearTs;
 
+    @Column(name = ALARM_ASSIGN_TS_PROPERTY)
+    private Long assignTs;
+
     @Type(type = "json")
-    @Column(name = ModelConstants.ASSET_ADDITIONAL_INFO_PROPERTY)
+    @Column(name = ModelConstants.ALARM_DETAILS_PROPERTY)
     private JsonNode details;
 
     @Column(name = ALARM_PROPAGATE_PROPERTY)
     private Boolean propagate;
+
+    @Column(name = ALARM_PROPAGATE_TO_OWNER_PROPERTY)
+    private Boolean propagateToOwner;
+
+    @Column(name = ALARM_PROPAGATE_TO_TENANT_PROPERTY)
+    private Boolean propagateToTenant;
 
     @Column(name = ALARM_PROPAGATE_RELATION_TYPES)
     private String propagateRelationTypes;
@@ -115,22 +140,32 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
         if (alarm.getTenantId() != null) {
             this.tenantId = alarm.getTenantId().getId();
         }
+        if (alarm.getCustomerId() != null) {
+            this.customerId = alarm.getCustomerId().getId();
+        }
         this.type = alarm.getType();
         this.originatorId = alarm.getOriginator().getId();
         this.originatorType = alarm.getOriginator().getEntityType();
         this.type = alarm.getType();
         this.severity = alarm.getSeverity();
-        this.status = alarm.getStatus();
+        this.acknowledged = alarm.isAcknowledged();
+        this.cleared = alarm.isCleared();
+        if (alarm.getAssigneeId() != null) {
+            this.assigneeId = alarm.getAssigneeId().getId();
+        }
         this.propagate = alarm.isPropagate();
+        this.propagateToOwner = alarm.isPropagateToOwner();
+        this.propagateToTenant = alarm.isPropagateToTenant();
         this.startTs = alarm.getStartTs();
         this.endTs = alarm.getEndTs();
         this.ackTs = alarm.getAckTs();
         this.clearTs = alarm.getClearTs();
+        this.assignTs = alarm.getAssignTs();
         this.details = alarm.getDetails();
         if (!CollectionUtils.isEmpty(alarm.getPropagateRelationTypes())) {
             this.propagateRelationTypes = String.join(",", alarm.getPropagateRelationTypes());
         } else {
-            this.propagateRelationTypes = null;
+            this.propagateRelationTypes = "";
         }
     }
 
@@ -138,17 +173,23 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
         this.setId(alarmEntity.getId());
         this.setCreatedTime(alarmEntity.getCreatedTime());
         this.tenantId = alarmEntity.getTenantId();
+        this.customerId = alarmEntity.getCustomerId();
         this.type = alarmEntity.getType();
         this.originatorId = alarmEntity.getOriginatorId();
         this.originatorType = alarmEntity.getOriginatorType();
         this.type = alarmEntity.getType();
         this.severity = alarmEntity.getSeverity();
-        this.status = alarmEntity.getStatus();
+        this.acknowledged = alarmEntity.isAcknowledged();
+        this.cleared = alarmEntity.isCleared();
+        this.assigneeId = alarmEntity.getAssigneeId();
         this.propagate = alarmEntity.getPropagate();
+        this.propagateToOwner = alarmEntity.getPropagateToOwner();
+        this.propagateToTenant = alarmEntity.getPropagateToTenant();
         this.startTs = alarmEntity.getStartTs();
         this.endTs = alarmEntity.getEndTs();
         this.ackTs = alarmEntity.getAckTs();
         this.clearTs = alarmEntity.getClearTs();
+        this.assignTs = alarmEntity.getAssignTs();
         this.details = alarmEntity.getDetails();
         this.propagateRelationTypes = alarmEntity.getPropagateRelationTypes();
     }
@@ -157,17 +198,27 @@ public abstract class AbstractAlarmEntity<T extends Alarm> extends BaseSqlEntity
         Alarm alarm = new Alarm(new AlarmId(id));
         alarm.setCreatedTime(createdTime);
         if (tenantId != null) {
-            alarm.setTenantId(new TenantId(tenantId));
+            alarm.setTenantId(TenantId.fromUUID(tenantId));
+        }
+        if (customerId != null) {
+            alarm.setCustomerId(new CustomerId(customerId));
         }
         alarm.setOriginator(EntityIdFactory.getByTypeAndUuid(originatorType, originatorId));
         alarm.setType(type);
         alarm.setSeverity(severity);
-        alarm.setStatus(status);
+        alarm.setAcknowledged(acknowledged);
+        alarm.setCleared(cleared);
+        if (assigneeId != null) {
+            alarm.setAssigneeId(new UserId(assigneeId));
+        }
         alarm.setPropagate(propagate);
+        alarm.setPropagateToOwner(propagateToOwner);
+        alarm.setPropagateToTenant(propagateToTenant);
         alarm.setStartTs(startTs);
         alarm.setEndTs(endTs);
         alarm.setAckTs(ackTs);
         alarm.setClearTs(clearTs);
+        alarm.setAssignTs(assignTs);
         alarm.setDetails(details);
         if (!StringUtils.isEmpty(propagateRelationTypes)) {
             alarm.setPropagateRelationTypes(Arrays.asList(propagateRelationTypes.split(",")));

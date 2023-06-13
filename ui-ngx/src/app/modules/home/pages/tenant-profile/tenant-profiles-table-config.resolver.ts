@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -15,13 +15,14 @@
 ///
 
 import { Injectable } from '@angular/core';
-import { Resolve } from '@angular/router';
+import { Resolve, Router } from '@angular/router';
 import { TenantProfile } from '@shared/models/tenant.model';
 import {
   checkBoxCell,
   DateEntityTableColumn,
   EntityTableColumn,
-  EntityTableConfig
+  EntityTableConfig,
+  HeaderActionDescriptor
 } from '@home/models/entity/entities-table-config.models';
 import { TranslateService } from '@ngx-translate/core';
 import { DatePipe } from '@angular/common';
@@ -31,6 +32,9 @@ import { TenantProfileService } from '@core/http/tenant-profile.service';
 import { TenantProfileComponent } from '../../components/profile/tenant-profile.component';
 import { TenantProfileTabsComponent } from './tenant-profile-tabs.component';
 import { DialogService } from '@core/services/dialog.service';
+import { ImportExportService } from '@home/components/import-export/import-export.service';
+import { map } from 'rxjs/operators';
+import { guid } from '@core/utils';
 
 @Injectable()
 export class TenantProfilesTableConfigResolver implements Resolve<EntityTableConfig<TenantProfile>> {
@@ -38,8 +42,10 @@ export class TenantProfilesTableConfigResolver implements Resolve<EntityTableCon
   private readonly config: EntityTableConfig<TenantProfile> = new EntityTableConfig<TenantProfile>();
 
   constructor(private tenantProfileService: TenantProfileService,
+              private importExport: ImportExportService,
               private translate: TranslateService,
               private datePipe: DatePipe,
+              private router: Router,
               private dialogService: DialogService) {
 
     this.config.entityType = EntityType.TENANT_PROFILE;
@@ -59,6 +65,12 @@ export class TenantProfilesTableConfigResolver implements Resolve<EntityTableCon
     );
 
     this.config.cellActionDescriptors.push(
+      {
+        name: this.translate.instant('tenant-profile.export'),
+        icon: 'file_download',
+        isEnabled: () => true,
+        onAction: ($event, entity) => this.exportTenantProfile($event, entity)
+      },
       {
         name: this.translate.instant('tenant-profile.set-default'),
         icon: 'flag',
@@ -80,12 +92,40 @@ export class TenantProfilesTableConfigResolver implements Resolve<EntityTableCon
     this.config.onEntityAction = action => this.onTenantProfileAction(action);
     this.config.deleteEnabled = (tenantProfile) => tenantProfile && !tenantProfile.default;
     this.config.entitySelectionEnabled = (tenantProfile) => tenantProfile && !tenantProfile.default;
+    this.config.addActionDescriptors = this.configureAddActions();
   }
 
   resolve(): EntityTableConfig<TenantProfile> {
     this.config.tableTitle = this.translate.instant('tenant-profile.tenant-profiles');
 
     return this.config;
+  }
+
+  configureAddActions(): Array<HeaderActionDescriptor> {
+    const actions: Array<HeaderActionDescriptor> = [];
+    actions.push(
+      {
+        name: this.translate.instant('tenant-profile.create-tenant-profile'),
+        icon: 'insert_drive_file',
+        isEnabled: () => true,
+        onAction: ($event) => this.config.getTable().addEntity($event)
+      },
+      {
+        name: this.translate.instant('tenant-profile.import'),
+        icon: 'file_upload',
+        isEnabled: () => true,
+        onAction: ($event) => this.importTenantProfile($event)
+      }
+    );
+    return actions;
+  }
+
+  private openTenantProfile($event: Event, tenantProfile: TenantProfile) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    const url = this.router.createUrlTree(['tenantProfiles', tenantProfile.id.id]);
+    this.router.navigateByUrl(url);
   }
 
   setDefaultTenantProfile($event: Event, tenantProfile: TenantProfile) {
@@ -102,7 +142,7 @@ export class TenantProfilesTableConfigResolver implements Resolve<EntityTableCon
         if (res) {
           this.tenantProfileService.setDefaultTenantProfile(tenantProfile.id.id).subscribe(
             () => {
-              this.config.table.updateData();
+              this.config.updateData();
             }
           );
         }
@@ -110,8 +150,28 @@ export class TenantProfilesTableConfigResolver implements Resolve<EntityTableCon
     );
   }
 
+  importTenantProfile($event: Event) {
+    this.importExport.importTenantProfile().subscribe(
+      (deviceProfile) => {
+        if (deviceProfile) {
+          this.config.updateData();
+        }
+      }
+    );
+  }
+
+  exportTenantProfile($event: Event, tenantProfile: TenantProfile) {
+    if ($event) {
+      $event.stopPropagation();
+    }
+    this.importExport.exportTenantProfile(tenantProfile.id.id);
+  }
+
   onTenantProfileAction(action: EntityAction<TenantProfile>): boolean {
     switch (action.action) {
+      case 'open':
+        this.openTenantProfile(action.event, action.entity);
+        return true;
       case 'setDefault':
         this.setDefaultTenantProfile(action.event, action.entity);
         return true;

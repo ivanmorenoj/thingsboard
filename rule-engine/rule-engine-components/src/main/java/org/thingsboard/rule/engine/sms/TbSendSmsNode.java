@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@ import org.thingsboard.rule.engine.api.TbNodeConfiguration;
 import org.thingsboard.rule.engine.api.TbNodeException;
 import org.thingsboard.rule.engine.api.sms.SmsSender;
 import org.thingsboard.rule.engine.api.util.TbNodeUtils;
-import org.thingsboard.server.common.data.ApiUsageRecordKey;
 import org.thingsboard.server.common.data.plugin.ComponentType;
 import org.thingsboard.server.common.msg.TbMsg;
 
@@ -37,7 +36,7 @@ import static org.thingsboard.common.util.DonAsynchron.withCallback;
         nodeDescription = "Sends SMS message via SMS provider.",
         nodeDetails = "Will send SMS message by populating target phone numbers and sms message fields using values derived from message metadata.",
         uiResources = {"static/rulenode/rulenode-core-config.js"},
-        configDirective = "tbActionNodeSendSmsConfig",
+        configDirective = "tbExternalNodeSendSmsConfig",
         icon = "sms"
 )
 public class TbSendSmsNode implements TbNode {
@@ -76,7 +75,7 @@ public class TbSendSmsNode implements TbNode {
         String message = TbNodeUtils.processPattern(this.config.getSmsMessageTemplate(), msg);
         String[] numbersToList = numbersTo.split(",");
         if (this.config.isUseSystemSmsSettings()) {
-            ctx.getSmsService().sendSms(ctx.getTenantId(), numbersToList, message);
+            ctx.getSmsService().sendSms(ctx.getTenantId(), msg.getCustomerId(), numbersToList, message);
         } else {
             for (String numberTo : numbersToList) {
                 this.smsSender.sendSms(numberTo, message);

@@ -1,6 +1,6 @@
 <!--
 
-    Copyright © 2016-2021 The Thingsboard Authors
+    Copyright © 2016-2023 The Thingsboard Authors
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -31,13 +31,37 @@
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'setRoot')"
-          [fxShow]="!isEdit && !entity?.root">
+          [fxShow]="!isEdit && ((!entity?.root && ruleChainScope === 'tenant') || (!isEdgeRootRuleChain() && ruleChainScope === 'edge'))">
     {{'rulechain.set-root' | translate }}
   </button>
   <button mat-raised-button color="primary"
           [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'setEdgeTemplateRoot')"
+          [fxShow]="!isEdit && !entity?.root && ruleChainScope === 'edges'">
+    {{'rulechain.set-edge-template-root-rulechain' | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'setAutoAssignToEdge')"
+          [fxShow]="!isEdit && isNotAutoAssignToEdgeRuleChain() && ruleChainScope === 'edges'">
+    {{'rulechain.set-auto-assign-to-edge' | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'unsetAutoAssignToEdge')"
+          [fxShow]="!isEdit && isAutoAssignToEdgeRuleChain() && ruleChainScope === 'edges'">
+    {{'rulechain.unset-auto-assign-to-edge' | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
+          (click)="onEntityAction($event, 'unassignFromEdge')"
+          [fxShow]="!isEdit && !isEdgeRootRuleChain() && ruleChainScope === 'edge'">
+    {{'edge.unassign-from-edge' | translate }}
+  </button>
+  <button mat-raised-button color="primary"
+          [disabled]="(isLoading$ | async)"
           (click)="onEntityAction($event, 'delete')"
-          [fxShow]="!hideDelete() && !isEdit">
+          [fxShow]="!hideDelete() && !isEdit && ruleChainScope !== 'edge'">
     {{'rulechain.delete' | translate }}
   </button>
   <div fxLayout="row">
@@ -59,6 +83,9 @@
         <input matInput formControlName="name" required>
         <mat-error *ngIf="entityForm.get('name').hasError('required')">
           {{ 'rulechain.name-required' | translate }}
+        </mat-error>
+        <mat-error *ngIf="entityForm.get('name').hasError('maxlength')">
+          {{ 'rulechain.name-max-length' | translate }}
         </mat-error>
       </mat-form-field>
       <mat-checkbox fxFlex formControlName="debugMode" style="padding-bottom: 16px;">

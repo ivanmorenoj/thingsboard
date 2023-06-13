@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSyntaxException;
 import org.apache.commons.lang3.math.NumberUtils;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.DataConstants;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
 import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
@@ -44,7 +44,7 @@ import org.thingsboard.server.gen.transport.TransportProtos.KeyValueType;
 import org.thingsboard.server.gen.transport.TransportProtos.PostAttributeMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.PostTelemetryMsg;
 import org.thingsboard.server.gen.transport.TransportProtos.ProvisionDeviceResponseMsg;
-import org.thingsboard.server.gen.transport.TransportProtos.ProvisionResponseStatus;
+import org.thingsboard.server.gen.transport.TransportProtos.ResponseStatus;
 import org.thingsboard.server.gen.transport.TransportProtos.TsKvListProto;
 import org.thingsboard.server.gen.transport.TransportProtos.TsKvProto;
 import org.thingsboard.server.gen.transport.TransportProtos.ValidateBasicMqttCredRequestMsg;
@@ -60,7 +60,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -75,10 +74,14 @@ public class JsonConverter {
 
     private static int maxStringValueLength = 0;
 
-    public static PostTelemetryMsg convertToTelemetryProto(JsonElement jsonElement) throws JsonSyntaxException {
+    public static PostTelemetryMsg convertToTelemetryProto(JsonElement jsonElement, long ts) throws JsonSyntaxException {
         PostTelemetryMsg.Builder builder = PostTelemetryMsg.newBuilder();
-        convertToTelemetry(jsonElement, System.currentTimeMillis(), null, builder);
+        convertToTelemetry(jsonElement, ts, null, builder);
         return builder.build();
+    }
+
+    public static PostTelemetryMsg convertToTelemetryProto(JsonElement jsonElement) throws JsonSyntaxException {
+        return convertToTelemetryProto(jsonElement, System.currentTimeMillis());
     }
 
     private static void convertToTelemetry(JsonElement jsonElement, long systemTs, Map<Long, List<KvEntry>> result, PostTelemetryMsg.Builder builder) {
@@ -108,7 +111,7 @@ public class JsonConverter {
     public static ClaimDeviceMsg convertToClaimDeviceProto(DeviceId deviceId, String json) {
         long durationMs = 0L;
         if (json != null && !json.isEmpty()) {
-            return convertToClaimDeviceProto(deviceId, new JsonParser().parse(json));
+            return convertToClaimDeviceProto(deviceId, JSON_PARSER.parse(json));
         }
         return buildClaimDeviceMsg(deviceId, DataConstants.DEFAULT_SECRET_KEY, durationMs);
     }
@@ -157,7 +160,7 @@ public class JsonConverter {
             result.addProperty("id", msg.getRequestId());
         }
         result.addProperty("method", msg.getMethodName());
-        result.add("params", new JsonParser().parse(msg.getParams()));
+        result.add("params", JSON_PARSER.parse(msg.getParams()));
         return result;
     }
 
@@ -223,21 +226,33 @@ public class JsonConverter {
     }
 
     private static KeyValueProto buildNumericKeyValueProto(JsonPrimitive value, String key) {
-        if (value.getAsString().contains(".")) {
-            return KeyValueProto.newBuilder()
-                    .setKey(key)
-                    .setType(KeyValueType.DOUBLE_V)
-                    .setDoubleV(value.getAsDouble())
-                    .build();
-        } else {
+        String valueAsString = value.getAsString();
+        KeyValueProto.Builder builder = KeyValueProto.newBuilder().setKey(key);
+        var bd = new BigDecimal(valueAsString);
+        if (bd.stripTrailingZeros().scale() <= 0 && !isSimpleDouble(valueAsString)) {
             try {
-                long longValue = Long.parseLong(value.getAsString());
-                return KeyValueProto.newBuilder().setKey(key).setType(KeyValueType.LONG_V)
-                        .setLongV(longValue).build();
-            } catch (NumberFormatException e) {
+                return builder.setType(KeyValueType.LONG_V).setLongV(bd.longValueExact()).build();
+            } catch (ArithmeticException e) {
+                if (isTypeCastEnabled) {
+                    return builder.setType(KeyValueType.STRING_V).setStringV(bd.toPlainString()).build();
+                } else {
+                    throw new JsonSyntaxException("Big integer values are not supported!");
+                }
+            }
+        } else {
+            if (bd.scale() <= 16) {
+                return builder.setType(KeyValueType.DOUBLE_V).setDoubleV(bd.doubleValue()).build();
+            } else if (isTypeCastEnabled) {
+                return builder.setType(KeyValueType.STRING_V).setStringV(bd.toPlainString()).build();
+            } else {
                 throw new JsonSyntaxException("Big integer values are not supported!");
             }
         }
+
+    }
+
+    private static boolean isSimpleDouble(String valueAsString) {
+        return valueAsString.contains(".") && !valueAsString.contains("E") && !valueAsString.contains("e");
     }
 
     public static TransportProtos.ToServerRpcRequestMsg convertToServerRpcRequest(JsonElement json, int requestId) throws JsonSyntaxException {
@@ -248,24 +263,23 @@ public class JsonConverter {
     private static void parseNumericValue(List<KvEntry> result, Entry<String, JsonElement> valueEntry, JsonPrimitive value) {
         String valueAsString = value.getAsString();
         String key = valueEntry.getKey();
-        if (valueAsString.contains("e") || valueAsString.contains("E")) {
-            var bd = new BigDecimal(valueAsString);
-            if (bd.stripTrailingZeros().scale() <= 0) {
-                try {
-                    result.add(new LongDataEntry(key, bd.longValueExact()));
-                } catch (ArithmeticException e) {
-                    result.add(new DoubleDataEntry(key, bd.doubleValue()));
-                }
-            } else {
-                result.add(new DoubleDataEntry(key, bd.doubleValue()));
-            }
-        } else if (valueAsString.contains(".")) {
-            result.add(new DoubleDataEntry(key, value.getAsDouble()));
-        } else {
+        var bd = new BigDecimal(valueAsString);
+        if (bd.stripTrailingZeros().scale() <= 0 && !isSimpleDouble(valueAsString)) {
             try {
-                long longValue = Long.parseLong(value.getAsString());
-                result.add(new LongDataEntry(key, longValue));
-            } catch (NumberFormatException e) {
+                result.add(new LongDataEntry(key, bd.longValueExact()));
+            } catch (ArithmeticException e) {
+                if (isTypeCastEnabled) {
+                    result.add(new StringDataEntry(key, bd.toPlainString()));
+                } else {
+                    throw new JsonSyntaxException("Big integer values are not supported!");
+                }
+            }
+        } else {
+            if (bd.scale() <= 16) {
+                result.add(new DoubleDataEntry(key, bd.doubleValue()));
+            } else if (isTypeCastEnabled) {
+                result.add(new StringDataEntry(key, bd.toPlainString()));
+            } else {
                 throw new JsonSyntaxException("Big integer values are not supported!");
             }
         }
@@ -286,7 +300,7 @@ public class JsonConverter {
         return result;
     }
 
-    public static JsonElement toJson(AttributeUpdateNotificationMsg payload) {
+    public static JsonObject toJson(AttributeUpdateNotificationMsg payload) {
         JsonObject result = new JsonObject();
         if (payload.getSharedUpdatedCount() > 0) {
             payload.getSharedUpdatedList().forEach(addToObjectFromProto(result));
@@ -299,16 +313,18 @@ public class JsonConverter {
         return result;
     }
 
-    public static JsonObject getJsonObjectForGateway(String deviceName, TransportProtos.GetAttributeResponseMsg
-            responseMsg) {
+    public static JsonObject getJsonObjectForGateway(
+            String deviceName,
+            TransportProtos.GetAttributeResponseMsg responseMsg
+    ) {
         JsonObject result = new JsonObject();
         result.addProperty("id", responseMsg.getRequestId());
         result.addProperty(DEVICE_PROPERTY, deviceName);
         if (responseMsg.getClientAttributeListCount() > 0) {
-            addValues(result, responseMsg.getClientAttributeListList());
+            addValues(result, responseMsg.getClientAttributeListList(), responseMsg.getIsMultipleAttributesRequest());
         }
         if (responseMsg.getSharedAttributeListCount() > 0) {
-            addValues(result, responseMsg.getSharedAttributeListList());
+            addValues(result, responseMsg.getSharedAttributeListList(), responseMsg.getIsMultipleAttributesRequest());
         }
         return result;
     }
@@ -321,8 +337,8 @@ public class JsonConverter {
         return result;
     }
 
-    private static void addValues(JsonObject result, List<TransportProtos.TsKvProto> kvList) {
-        if (kvList.size() == 1) {
+    private static void addValues(JsonObject result, List<TransportProtos.TsKvProto> kvList, boolean multipleAttrKeysRequested) {
+        if (kvList.size() == 1 && !multipleAttrKeysRequested) {
             addValueToJson(result, "value", kvList.get(0).getKv());
         } else {
             JsonObject values;
@@ -406,7 +422,7 @@ public class JsonConverter {
 
     public static JsonElement toJson(TransportProtos.ToServerRpcResponseMsg msg) {
         if (StringUtils.isEmpty(msg.getError())) {
-            return new JsonParser().parse(msg.getPayload());
+            return JSON_PARSER.parse(msg.getPayload());
         } else {
             JsonObject errorMsg = new JsonObject();
             errorMsg.addProperty("error", msg.getError());
@@ -424,12 +440,12 @@ public class JsonConverter {
 
     private static JsonObject toJson(ProvisionDeviceResponseMsg payload, boolean toGateway, int requestId) {
         JsonObject result = new JsonObject();
-        if (payload.getStatus() == TransportProtos.ProvisionResponseStatus.NOT_FOUND) {
+        if (payload.getStatus() == ResponseStatus.NOT_FOUND) {
             result.addProperty("errorMsg", "Provision data was not found!");
-            result.addProperty("status", ProvisionResponseStatus.NOT_FOUND.name());
-        } else if (payload.getStatus() == TransportProtos.ProvisionResponseStatus.FAILURE) {
+            result.addProperty("status", ResponseStatus.NOT_FOUND.name());
+        } else if (payload.getStatus() == TransportProtos.ResponseStatus.FAILURE) {
             result.addProperty("errorMsg", "Failed to provision device!");
-            result.addProperty("status", ProvisionResponseStatus.FAILURE.name());
+            result.addProperty("status", ResponseStatus.FAILURE.name());
         } else {
             if (toGateway) {
                 result.addProperty("id", requestId);
@@ -442,9 +458,11 @@ public class JsonConverter {
                 case MQTT_BASIC:
                     result.add("credentialsValue", JSON_PARSER.parse(payload.getCredentialsValue()).getAsJsonObject());
                     break;
+                case LWM2M_CREDENTIALS:
+                    break;
             }
             result.addProperty("credentialsType", payload.getCredentialsType().name());
-            result.addProperty("status", ProvisionResponseStatus.SUCCESS.name());
+            result.addProperty("status", ResponseStatus.SUCCESS.name());
         }
         return result;
     }
@@ -553,6 +571,26 @@ public class JsonConverter {
         }
     }
 
+    public static JsonElement parse(String json) {
+        return JSON_PARSER.parse(json);
+    }
+
+    public static <T> T parse(String json, Class<T> clazz) {
+        return fromJson(parse(json), clazz);
+    }
+
+    public static String toJson(JsonElement element) {
+        return GSON.toJson(element);
+    }
+
+    public static JsonObject toJsonObject(Object o) {
+        return (JsonObject) GSON.toJsonTree(o);
+    }
+
+    public static <T> T fromJson(JsonElement element, Class<T> type) {
+        return GSON.fromJson(element, type);
+    }
+
     public static void setTypeCastEnabled(boolean enabled) {
         isTypeCastEnabled = enabled;
     }
@@ -562,7 +600,7 @@ public class JsonConverter {
     }
 
     public static TransportProtos.ProvisionDeviceRequestMsg convertToProvisionRequestMsg(String json) {
-        JsonElement jsonElement = new JsonParser().parse(json);
+        JsonElement jsonElement = JSON_PARSER.parse(json);
         if (jsonElement.isJsonObject()) {
             return buildProvisionRequestMsg(jsonElement.getAsJsonObject());
         } else {
@@ -594,8 +632,7 @@ public class JsonConverter {
                 .build();
     }
 
-    private static TransportProtos.ProvisionDeviceCredentialsMsg buildProvisionDeviceCredentialsMsg(String
-                                                                                                            provisionKey, String provisionSecret) {
+    private static TransportProtos.ProvisionDeviceCredentialsMsg buildProvisionDeviceCredentialsMsg(String provisionKey, String provisionSecret) {
         return TransportProtos.ProvisionDeviceCredentialsMsg.newBuilder()
                 .setProvisionDeviceKey(provisionKey)
                 .setProvisionDeviceSecret(provisionSecret)

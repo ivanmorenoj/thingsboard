@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -21,11 +21,9 @@ import { HttpClient } from '@angular/common/http';
 import { PageLink } from '@shared/models/page/page-link';
 import { PageData } from '@shared/models/page/page-data';
 import {
-  ResolvedRuleChainMetaData,
   RuleChain,
-  RuleChainConnectionInfo,
   RuleChainMetaData,
-  ruleChainNodeComponent,
+  RuleChainType,
   ruleNodeTypeComponentTypes,
   unknownNodeComponent
 } from '@shared/models/rule-chain.models';
@@ -33,23 +31,25 @@ import { ComponentDescriptorService } from './component-descriptor.service';
 import {
   IRuleNodeConfigurationComponent,
   LinkLabel,
-  RuleNodeComponentDescriptor,
+  RuleNodeComponentDescriptor, RuleNodeConfiguration, ScriptLanguage,
   TestScriptInputParams,
   TestScriptResult
 } from '@app/shared/models/rule-node.models';
 import { ResourcesService } from '../services/resources.service';
 import { catchError, map, mergeMap } from 'rxjs/operators';
 import { TranslateService } from '@ngx-translate/core';
-import { EntityType } from '@shared/models/entity-type.models';
 import { deepClone, snakeCase } from '@core/utils';
 import { DebugRuleNodeEventBody } from '@app/shared/models/event.models';
+import { Edge } from '@shared/models/edge.models';
+import { IModulesMap } from '@modules/common/modules-map.models';
 
 @Injectable({
   providedIn: 'root'
 })
 export class RuleChainService {
 
-  private ruleNodeComponents: Array<RuleNodeComponentDescriptor>;
+  private ruleNodeComponentsMap: Map<RuleChainType, Array<RuleNodeComponentDescriptor>> =
+    new Map<RuleChainType, Array<RuleNodeComponentDescriptor>>();
   private ruleNodeConfigFactories: {[directive: string]: ComponentFactory<IRuleNodeConfigurationComponent>} = {};
 
   constructor(
@@ -59,13 +59,18 @@ export class RuleChainService {
     private translate: TranslateService
   ) { }
 
-  public getRuleChains(pageLink: PageLink, config?: RequestConfig): Observable<PageData<RuleChain>> {
-    return this.http.get<PageData<RuleChain>>(`/api/ruleChains${pageLink.toQuery()}`,
+  public getRuleChains(pageLink: PageLink, type: RuleChainType = RuleChainType.CORE,
+                       config?: RequestConfig): Observable<PageData<RuleChain>> {
+    return this.http.get<PageData<RuleChain>>(`/api/ruleChains${pageLink.toQuery()}&type=${type}`,
       defaultHttpOptionsFromConfig(config));
   }
 
   public getRuleChain(ruleChainId: string, config?: RequestConfig): Observable<RuleChain> {
     return this.http.get<RuleChain>(`/api/ruleChain/${ruleChainId}`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public getRuleChainOutputLabels(ruleChainId: string, config?: RequestConfig): Observable<Array<string>> {
+    return this.http.get<Array<string>>(`/api/ruleChain/${ruleChainId}/output/labels`, defaultHttpOptionsFromConfig(config));
   }
 
   public createDefaultRuleChain(ruleChainName: string, config?: RequestConfig): Observable<RuleChain> {
@@ -90,44 +95,21 @@ export class RuleChainService {
     return this.http.get<RuleChainMetaData>(`/api/ruleChain/${ruleChainId}/metadata`, defaultHttpOptionsFromConfig(config));
   }
 
-  public getResolvedRuleChainMetadata(ruleChainId: string, config?: RequestConfig): Observable<ResolvedRuleChainMetaData> {
-    return this.getRuleChainMetadata(ruleChainId, config).pipe(
-      mergeMap((ruleChainMetaData) => this.resolveRuleChainMetadata(ruleChainMetaData))
-    );
-  }
-
   public saveRuleChainMetadata(ruleChainMetaData: RuleChainMetaData, config?: RequestConfig): Observable<RuleChainMetaData> {
     return this.http.post<RuleChainMetaData>('/api/ruleChain/metadata', ruleChainMetaData, defaultHttpOptionsFromConfig(config));
   }
 
-  public saveAndGetResolvedRuleChainMetadata(ruleChainMetaData: RuleChainMetaData,
-                                             config?: RequestConfig): Observable<ResolvedRuleChainMetaData> {
-    return this.saveRuleChainMetadata(ruleChainMetaData, config).pipe(
-      mergeMap((savedRuleChainMetaData) => this.resolveRuleChainMetadata(savedRuleChainMetaData))
-    );
-  }
-
-  public resolveRuleChainMetadata(ruleChainMetaData: RuleChainMetaData): Observable<ResolvedRuleChainMetaData> {
-    return this.resolveTargetRuleChains(ruleChainMetaData.ruleChainConnections).pipe(
-      map((targetRuleChainsMap) => {
-        const resolvedRuleChainMetadata: ResolvedRuleChainMetaData = {...ruleChainMetaData, targetRuleChainsMap};
-        return resolvedRuleChainMetadata;
-      })
-    );
-  }
-
-  public getRuleNodeComponents(ruleNodeConfigResourcesModulesMap: {[key: string]: any}, config?: RequestConfig):
+  public getRuleNodeComponents(modulesMap: IModulesMap, ruleChainType: RuleChainType, config?: RequestConfig):
     Observable<Array<RuleNodeComponentDescriptor>> {
-     if (this.ruleNodeComponents) {
-       return of(this.ruleNodeComponents);
+     if (this.ruleNodeComponentsMap.get(ruleChainType)) {
+       return of(this.ruleNodeComponentsMap.get(ruleChainType));
      } else {
-      return this.loadRuleNodeComponents(config).pipe(
+      return this.loadRuleNodeComponents(ruleChainType, config).pipe(
         mergeMap((components) => {
-          return this.resolveRuleNodeComponentsUiResources(components, ruleNodeConfigResourcesModulesMap).pipe(
+          return this.resolveRuleNodeComponentsUiResources(components, modulesMap).pipe(
             map((ruleNodeComponents) => {
-              this.ruleNodeComponents = ruleNodeComponents;
-              this.ruleNodeComponents.push(ruleChainNodeComponent);
-              this.ruleNodeComponents.sort(
+              this.ruleNodeComponentsMap.set(ruleChainType, ruleNodeComponents);
+              this.ruleNodeComponentsMap.get(ruleChainType).sort(
                 (comp1, comp2) => {
                   let result = comp1.type.toString().localeCompare(comp2.type.toString());
                   if (result === 0) {
@@ -136,7 +118,7 @@ export class RuleChainService {
                   return result;
                 }
               );
-              return this.ruleNodeComponents;
+              return this.ruleNodeComponentsMap.get(ruleChainType);
             })
           );
         })
@@ -148,8 +130,8 @@ export class RuleChainService {
     return this.ruleNodeConfigFactories[directive];
   }
 
-  public getRuleNodeComponentByClazz(clazz: string): RuleNodeComponentDescriptor {
-    const found = this.ruleNodeComponents.filter((component) => component.clazz === clazz);
+  public getRuleNodeComponentByClazz(ruleChainType: RuleChainType = RuleChainType.CORE, clazz: string): RuleNodeComponentDescriptor {
+    const found = this.ruleNodeComponentsMap.get(ruleChainType).filter((component) => component.clazz === clazz);
     if (found && found.length) {
       return found[0];
     } else {
@@ -176,36 +158,28 @@ export class RuleChainService {
     return component.configurationDescriptor.nodeDefinition.customRelations;
   }
 
+  public ruleNodeSourceRuleChainId(component: RuleNodeComponentDescriptor, config: RuleNodeConfiguration): string {
+    if (component.configurationDescriptor.nodeDefinition.ruleChainNode) {
+      return config?.ruleChainId;
+    } else {
+      return null;
+    }
+  }
+
   public getLatestRuleNodeDebugInput(ruleNodeId: string, config?: RequestConfig): Observable<DebugRuleNodeEventBody> {
     return this.http.get<DebugRuleNodeEventBody>(`/api/ruleNode/${ruleNodeId}/debugIn`, defaultHttpOptionsFromConfig(config));
   }
 
-  public testScript(inputParams: TestScriptInputParams, config?: RequestConfig): Observable<TestScriptResult> {
-    return this.http.post<TestScriptResult>('/api/ruleChain/testScript', inputParams, defaultHttpOptionsFromConfig(config));
-  }
-
-  private resolveTargetRuleChains(ruleChainConnections: Array<RuleChainConnectionInfo>): Observable<{[ruleChainId: string]: RuleChain}> {
-    if (ruleChainConnections && ruleChainConnections.length) {
-      const tasks: Observable<RuleChain>[] = [];
-      ruleChainConnections.forEach((connection) => {
-        tasks.push(this.resolveRuleChain(connection.targetRuleChainId.id));
-      });
-      return forkJoin(tasks).pipe(
-        map((ruleChains) => {
-          const ruleChainsMap: {[ruleChainId: string]: RuleChain} = {};
-          ruleChains.forEach((ruleChain) => {
-            ruleChainsMap[ruleChain.id.id] = ruleChain;
-          });
-          return ruleChainsMap;
-        })
-      );
-    } else {
-      return of({} as {[ruleChainId: string]: RuleChain});
+  public testScript(inputParams: TestScriptInputParams, scriptLang?: ScriptLanguage, config?: RequestConfig): Observable<TestScriptResult> {
+    let url = '/api/ruleChain/testScript';
+    if (scriptLang) {
+      url += `?scriptLang=${scriptLang}`;
     }
+    return this.http.post<TestScriptResult>(url, inputParams, defaultHttpOptionsFromConfig(config));
   }
 
-  private loadRuleNodeComponents(config?: RequestConfig): Observable<Array<RuleNodeComponentDescriptor>> {
-    return this.componentDescriptorService.getComponentDescriptorsByTypes(ruleNodeTypeComponentTypes, config).pipe(
+  private loadRuleNodeComponents(ruleChainType: RuleChainType, config?: RequestConfig): Observable<Array<RuleNodeComponentDescriptor>> {
+    return this.componentDescriptorService.getComponentDescriptorsByTypes(ruleNodeTypeComponentTypes, ruleChainType, config).pipe(
       map((components) => {
         const ruleNodeComponents: RuleNodeComponentDescriptor[] = [];
         components.forEach((component) => {
@@ -217,21 +191,21 @@ export class RuleChainService {
   }
 
   private resolveRuleNodeComponentsUiResources(components: Array<RuleNodeComponentDescriptor>,
-                                               ruleNodeConfigResourcesModulesMap: {[key: string]: any}):
+                                               modulesMap: IModulesMap):
     Observable<Array<RuleNodeComponentDescriptor>> {
     const tasks: Observable<RuleNodeComponentDescriptor>[] = [];
     components.forEach((component) => {
-      tasks.push(this.resolveRuleNodeComponentUiResources(component, ruleNodeConfigResourcesModulesMap));
+      tasks.push(this.resolveRuleNodeComponentUiResources(component, modulesMap));
     });
     return forkJoin(tasks).pipe(
-      catchError((err) => {
+      catchError(() => {
         return of(components);
       })
     );
   }
 
   private resolveRuleNodeComponentUiResources(component: RuleNodeComponentDescriptor,
-                                              ruleNodeConfigResourcesModulesMap: {[key: string]: any}):
+                                              modulesMap: IModulesMap):
     Observable<RuleNodeComponentDescriptor> {
     const nodeDefinition = component.configurationDescriptor.nodeDefinition;
     const uiResources = nodeDefinition.uiResources;
@@ -245,11 +219,11 @@ export class RuleChainService {
         });
       }
       if (moduleResource) {
-        tasks.push(this.resourcesService.loadFactories(moduleResource, ruleNodeConfigResourcesModulesMap).pipe(
+        tasks.push(this.resourcesService.loadFactories(moduleResource, modulesMap).pipe(
           map((res) => {
             if (nodeDefinition.configDirective && nodeDefinition.configDirective.length) {
               const selector = snakeCase(nodeDefinition.configDirective, '-');
-              const componentFactory = res.find((factory) =>
+              const componentFactory = res.factories.find((factory) =>
               factory.selector === selector);
               if (componentFactory) {
                 this.ruleNodeConfigFactories[nodeDefinition.configDirective] = componentFactory;
@@ -264,7 +238,7 @@ export class RuleChainService {
         ));
       }
       return forkJoin(tasks).pipe(
-        map((res) => {
+        map(() => {
           return component;
         }),
         catchError(() => {
@@ -277,19 +251,38 @@ export class RuleChainService {
     }
   }
 
-  private resolveRuleChain(ruleChainId: string): Observable<RuleChain> {
-    return this.getRuleChain(ruleChainId, {ignoreErrors: true}).pipe(
-      map(ruleChain => ruleChain),
-      catchError((err) => {
-        const ruleChain = {
-         id: {
-            entityType: EntityType.RULE_CHAIN,
-            id: ruleChainId
-          }
-        } as RuleChain;
-        return of(ruleChain);
-      })
-    );
+  public getEdgeRuleChains(edgeId: string, pageLink: PageLink, config?: RequestConfig): Observable<PageData<RuleChain>> {
+    return this.http.get<PageData<RuleChain>>(`/api/edge/${edgeId}/ruleChains${pageLink.toQuery()}`,
+      defaultHttpOptionsFromConfig(config));
+  }
+
+  public assignRuleChainToEdge(edgeId: string, ruleChainId: string, config?: RequestConfig): Observable<RuleChain> {
+    return this.http.post<RuleChain>(`/api/edge/${edgeId}/ruleChain/${ruleChainId}`, null,
+      defaultHttpOptionsFromConfig(config));
+  }
+
+  public unassignRuleChainFromEdge(edgeId: string, ruleChainId: string, config?: RequestConfig) {
+    return this.http.delete(`/api/edge/${edgeId}/ruleChain/${ruleChainId}`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public setEdgeTemplateRootRuleChain(ruleChainId: string, config?: RequestConfig): Observable<RuleChain> {
+    return this.http.post<RuleChain>(`/api/ruleChain/${ruleChainId}/edgeTemplateRoot`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public setAutoAssignToEdgeRuleChain(ruleChainId: string, config?: RequestConfig): Observable<RuleChain> {
+    return this.http.post<RuleChain>(`/api/ruleChain/${ruleChainId}/autoAssignToEdge`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public unsetAutoAssignToEdgeRuleChain(ruleChainId: string, config?: RequestConfig): Observable<RuleChain> {
+    return this.http.delete<RuleChain>(`/api/ruleChain/${ruleChainId}/autoAssignToEdge`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public getAutoAssignToEdgeRuleChains(config?: RequestConfig): Observable<Array<RuleChain>> {
+    return this.http.get<Array<RuleChain>>(`/api/ruleChain/autoAssignToEdgeRuleChains`, defaultHttpOptionsFromConfig(config));
+  }
+
+  public setEdgeRootRuleChain(edgeId: string, ruleChainId: string, config?: RequestConfig): Observable<Edge> {
+    return this.http.post<Edge>(`/api/edge/${edgeId}/${ruleChainId}/root`, defaultHttpOptionsFromConfig(config));
   }
 
 }

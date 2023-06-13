@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import { EntityViewInfo } from '@app/shared/models/entity-view.models';
 @Component({
   selector: 'tb-entity-view-table-header',
   templateUrl: './entity-view-table-header.component.html',
-  styleUrls: ['./entity-view-table-header.component.scss']
+  styleUrls: []
 })
 export class EntityViewTableHeaderComponent extends EntityTableHeaderComponent<EntityViewInfo> {
 
@@ -36,7 +36,7 @@ export class EntityViewTableHeaderComponent extends EntityTableHeaderComponent<E
 
   entityViewTypeChanged(entityViewType: string) {
     this.entitiesTableConfig.componentsData.entityViewType = entityViewType;
-    this.entitiesTableConfig.table.resetSortAndFilter(true);
+    this.entitiesTableConfig.getTable().resetSortAndFilter(true);
   }
 
 }

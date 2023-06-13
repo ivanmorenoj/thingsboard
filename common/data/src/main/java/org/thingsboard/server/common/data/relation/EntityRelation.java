@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,27 +16,29 @@
 package org.thingsboard.server.common.data.relation;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.common.data.SearchTextBasedWithAdditionalInfo;
 import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.validation.Length;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.Serializable;
 
 @Slf4j
+@ApiModel
 public class EntityRelation implements Serializable {
 
     private static final long serialVersionUID = 2807343040519543363L;
 
+    public static final String EDGE_TYPE = "ManagedByEdge";
     public static final String CONTAINS_TYPE = "Contains";
     public static final String MANAGES_TYPE = "Manages";
 
     private EntityId from;
     private EntityId to;
+    @Length(fieldName = "type")
     private String type;
     private RelationTypeGroup typeGroup;
     private transient JsonNode additionalInfo;
@@ -71,6 +73,7 @@ public class EntityRelation implements Serializable {
         this.additionalInfo = entityRelation.getAdditionalInfo();
     }
 
+    @ApiModelProperty(position = 1, value = "JSON object with [from] Entity Id.", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     public EntityId getFrom() {
         return from;
     }
@@ -79,6 +82,7 @@ public class EntityRelation implements Serializable {
         this.from = from;
     }
 
+    @ApiModelProperty(position = 2, value = "JSON object with [to] Entity Id.", accessMode = ApiModelProperty.AccessMode.READ_ONLY)
     public EntityId getTo() {
         return to;
     }
@@ -87,6 +91,7 @@ public class EntityRelation implements Serializable {
         this.to = to;
     }
 
+    @ApiModelProperty(position = 3, value = "String value of relation type.", example = "Contains")
     public String getType() {
         return type;
     }
@@ -95,6 +100,7 @@ public class EntityRelation implements Serializable {
         this.type = type;
     }
 
+    @ApiModelProperty(position = 4, value = "Represents the type group of the relation.", example = "COMMON")
     public RelationTypeGroup getTypeGroup() {
         return typeGroup;
     }
@@ -103,6 +109,7 @@ public class EntityRelation implements Serializable {
         this.typeGroup = typeGroup;
     }
 
+    @ApiModelProperty(position = 5, value = "Additional parameters of the relation", dataType = "com.fasterxml.jackson.databind.JsonNode")
     public JsonNode getAdditionalInfo() {
         return SearchTextBasedWithAdditionalInfo.getJson(() -> additionalInfo, () -> additionalInfoBytes);
     }

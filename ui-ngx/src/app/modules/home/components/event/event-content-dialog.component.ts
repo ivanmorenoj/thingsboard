@@ -1,5 +1,5 @@
 ///
-/// Copyright © 2016-2021 The Thingsboard Authors
+/// Copyright © 2016-2023 The Thingsboard Authors
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 /// limitations under the License.
 ///
 
-import { Component, ElementRef, Inject, OnInit, Renderer2, ViewChild } from '@angular/core';
+import { Component, ElementRef, Inject, OnDestroy, OnInit, Renderer2, ViewChild } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
@@ -27,6 +27,7 @@ import { getAce } from '@shared/models/ace/ace.models';
 import { Observable } from 'rxjs/internal/Observable';
 import { beautifyJs } from '@shared/models/beautify.models';
 import { of } from 'rxjs';
+import { base64toString, isLiteralObject } from '@core/utils';
 
 export interface EventContentDialogData {
   content: string;
@@ -39,7 +40,7 @@ export interface EventContentDialogData {
   templateUrl: './event-content-dialog.component.html',
   styleUrls: ['./event-content-dialog.component.scss']
 })
-export class EventContentDialogComponent extends DialogComponent<EventContentDialogData> implements OnInit {
+export class EventContentDialogComponent extends DialogComponent<EventContentDialogData> implements OnInit, OnDestroy {
 
   @ViewChild('eventContentEditor', {static: true})
   eventContentEditorElmRef: ElementRef;
@@ -47,6 +48,7 @@ export class EventContentDialogComponent extends DialogComponent<EventContentDia
   content: string;
   title: string;
   contentType: ContentType;
+  aceEditor: Ace.Editor;
 
   constructor(protected store: Store<AppState>,
               protected router: Router,
@@ -64,6 +66,21 @@ export class EventContentDialogComponent extends DialogComponent<EventContentDia
     this.createEditor(this.eventContentEditorElmRef, this.content);
   }
 
+  ngOnDestroy(): void {
+    if (this.aceEditor) {
+      this.aceEditor.destroy();
+    }
+    super.ngOnDestroy();
+  }
+
+  isJson(str) {
+    try {
+      return isLiteralObject(JSON.parse(str));
+    } catch (e) {
+      return false;
+    }
+  }
+
   createEditor(editorElementRef: ElementRef, content: string) {
     const editorElement = editorElementRef.nativeElement;
     let mode = 'java';
@@ -72,6 +89,16 @@ export class EventContentDialogComponent extends DialogComponent<EventContentDia
       mode = contentTypesMap.get(this.contentType).code;
       if (this.contentType === ContentType.JSON && content) {
         content$ = beautifyJs(content, {indent_size: 4});
+      } else if (this.contentType === ContentType.BINARY && content) {
+        try {
+          const decodedData = base64toString(content);
+          if (this.isJson(decodedData)) {
+            mode = 'json';
+            content$ = beautifyJs(decodedData, {indent_size: 4});
+          } else {
+            content$ = of(decodedData);
+          }
+        } catch (e) {}
       }
     }
     if (!content$) {
@@ -97,10 +124,10 @@ export class EventContentDialogComponent extends DialogComponent<EventContentDia
         editorOptions = {...editorOptions, ...advancedOptions};
         getAce().subscribe(
           (ace) => {
-            const editor = ace.edit(editorElement, editorOptions);
-            editor.session.setUseWrapMode(false);
-            editor.setValue(processedContent, -1);
-            this.updateEditorSize(editorElement, processedContent, editor);
+            this.aceEditor = ace.edit(editorElement, editorOptions);
+            this.aceEditor.session.setUseWrapMode(false);
+            this.aceEditor.setValue(processedContent, -1);
+            this.updateEditorSize(editorElement, processedContent, this.aceEditor);
           }
         );
       }

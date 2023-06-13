@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,18 +17,19 @@ package org.thingsboard.rule.engine.profile;
 
 import com.google.gson.JsonParser;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.util.StringUtils;
+import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.api.TbContext;
 import org.thingsboard.rule.engine.profile.state.PersistedAlarmState;
 import org.thingsboard.rule.engine.profile.state.PersistedDeviceState;
-import org.thingsboard.rule.engine.telemetry.TbMsgTimeseriesNode;
 import org.thingsboard.server.common.data.DataConstants;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.DeviceProfile;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.alarm.Alarm;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionFilterKey;
 import org.thingsboard.server.common.data.device.profile.AlarmConditionKeyType;
 import org.thingsboard.server.common.data.device.profile.DeviceProfileAlarm;
+import org.thingsboard.server.common.data.exception.ApiUsageLimitsExceededException;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
 import org.thingsboard.server.common.data.id.EntityId;
@@ -42,7 +43,6 @@ import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.session.SessionMsgType;
 import org.thingsboard.server.common.transport.adaptor.JsonConverter;
 import org.thingsboard.server.dao.sql.query.EntityKeyMapping;
-import org.thingsboard.server.dao.util.mapping.JacksonUtil;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -99,7 +99,7 @@ class DeviceState {
     }
 
     public void updateProfile(TbContext ctx, DeviceProfile deviceProfile) throws ExecutionException, InterruptedException {
-        Set<AlarmConditionFilterKey> oldKeys = this.deviceProfile.getEntityKeys();
+        Set<AlarmConditionFilterKey> oldKeys = Set.copyOf(this.deviceProfile.getEntityKeys());
         this.deviceProfile.updateDeviceProfile(deviceProfile);
         if (latestValues != null) {
             Set<AlarmConditionFilterKey> keysToFetch = new HashSet<>(this.deviceProfile.getEntityKeys());
@@ -150,6 +150,8 @@ class DeviceState {
             stateChanged = processAlarmClearNotification(ctx, msg);
         } else if (msg.getType().equals(DataConstants.ALARM_ACK)) {
             processAlarmAckNotification(ctx, msg);
+        } else if (msg.getType().equals(DataConstants.ALARM_DELETE)) {
+            processAlarmDeleteNotification(ctx, msg);
         } else {
             if (msg.getType().equals(DataConstants.ENTITY_ASSIGNED) || msg.getType().equals(DataConstants.ENTITY_UNASSIGNED)) {
                 dynamicPredicateValueCtx.resetCustomer();
@@ -193,6 +195,13 @@ class DeviceState {
         ctx.tellSuccess(msg);
     }
 
+    private void processAlarmDeleteNotification(TbContext ctx, TbMsg msg) {
+        Alarm alarm = JacksonUtil.fromString(msg.getData(), Alarm.class);
+        alarmStates.values().removeIf(alarmState -> alarmState.getCurrentAlarm() != null
+                && alarmState.getCurrentAlarm().getId().equals(alarm.getId()));
+        ctx.tellSuccess(msg);
+    }
+
     private boolean processAttributesUpdateNotification(TbContext ctx, TbMsg msg) throws ExecutionException, InterruptedException {
         String scope = msg.getMetaData().getValue(DataConstants.SCOPE);
         if (StringUtils.isEmpty(scope)) {
@@ -211,11 +220,15 @@ class DeviceState {
         }
         if (!keys.isEmpty()) {
             EntityKeyType keyType = getKeyTypeFromScope(scope);
-            keys.forEach(key -> latestValues.removeValue(new EntityKey(keyType, key)));
+            Set<AlarmConditionFilterKey> removedKeys = keys.stream().map(key -> new EntityKey(keyType, key))
+                    .peek(latestValues::removeValue)
+                    .map(DataSnapshot::toConditionKey).collect(Collectors.toSet());
+            SnapshotUpdate update = new SnapshotUpdate(AlarmConditionKeyType.ATTRIBUTE, removedKeys);
+
             for (DeviceProfileAlarm alarm : deviceProfile.getAlarmSettings()) {
                 AlarmState alarmState = alarmStates.computeIfAbsent(alarm.getId(),
                         a -> new AlarmState(this.deviceProfile, deviceId, alarm, getOrInitPersistedAlarmState(alarm), dynamicPredicateValueCtx));
-                stateChanged |= alarmState.process(ctx, msg, latestValues, null);
+                stateChanged |= alarmState.process(ctx, msg, latestValues, update);
             }
         }
         ctx.tellSuccess(msg);
@@ -243,7 +256,7 @@ class DeviceState {
 
     protected boolean processTelemetry(TbContext ctx, TbMsg msg) throws ExecutionException, InterruptedException {
         boolean stateChanged = false;
-        Map<Long, List<KvEntry>> tsKvMap = JsonConverter.convertToSortedTelemetry(new JsonParser().parse(msg.getData()), TbMsgTimeseriesNode.getTs(msg));
+        Map<Long, List<KvEntry>> tsKvMap = JsonConverter.convertToSortedTelemetry(new JsonParser().parse(msg.getData()), msg.getMetaDataTs());
         // iterate over data by ts (ASC order).
         for (Map.Entry<Long, List<KvEntry>> entry : tsKvMap.entrySet()) {
             Long ts = entry.getKey();
@@ -253,7 +266,12 @@ class DeviceState {
                 for (DeviceProfileAlarm alarm : deviceProfile.getAlarmSettings()) {
                     AlarmState alarmState = alarmStates.computeIfAbsent(alarm.getId(),
                             a -> new AlarmState(this.deviceProfile, deviceId, alarm, getOrInitPersistedAlarmState(alarm), dynamicPredicateValueCtx));
-                    stateChanged |= alarmState.process(ctx, msg, latestValues, update);
+                    try {
+                        stateChanged |= alarmState.process(ctx, msg, latestValues, update);
+                    } catch (ApiUsageLimitsExceededException e) {
+                        alarmStates.remove(alarm.getId());
+                        throw e;
+                    }
                 }
             }
         }

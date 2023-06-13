@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2021 The Thingsboard Authors
+ * Copyright © 2016-2023 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,18 @@
  */
 package org.thingsboard.server.common.transport.adaptor;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.protobuf.Descriptors;
+import com.google.protobuf.DynamicMessage;
 import com.google.protobuf.InvalidProtocolBufferException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
 import org.thingsboard.server.common.data.DataConstants;
+import org.thingsboard.server.common.data.DynamicProtoUtils;
+import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.gen.transport.TransportApiProtos;
 import org.thingsboard.server.gen.transport.TransportProtos;
@@ -32,6 +38,7 @@ import java.util.List;
 @Slf4j
 public class ProtoConverter {
 
+    public static final Gson GSON = new Gson();
     public static final JsonParser JSON_PARSER = new JsonParser();
 
     public static TransportProtos.PostTelemetryMsg convertToTelemetryProto(byte[] payload) throws InvalidProtocolBufferException, IllegalArgumentException {
@@ -59,13 +66,15 @@ public class ProtoConverter {
         }
     }
 
-    public static TransportProtos.PostAttributeMsg validatePostAttributeMsg(byte[] bytes) throws IllegalArgumentException, InvalidProtocolBufferException {
-        TransportProtos.PostAttributeMsg proto = TransportProtos.PostAttributeMsg.parseFrom(bytes);
-        List<TransportProtos.KeyValueProto> kvList = proto.getKvList();
-        if (!CollectionUtils.isEmpty(kvList)) {
+    public static TransportProtos.PostAttributeMsg validatePostAttributeMsg(TransportProtos.PostAttributeMsg msg) throws IllegalArgumentException, InvalidProtocolBufferException {
+        if (!CollectionUtils.isEmpty(msg.getKvList())) {
+            byte[] bytes = msg.toByteArray();
+            TransportProtos.PostAttributeMsg proto = TransportProtos.PostAttributeMsg.parseFrom(bytes);
+            List<TransportProtos.KeyValueProto> kvList = proto.getKvList();
             List<TransportProtos.KeyValueProto> keyValueProtos = validateKeyValueProtos(kvList);
             TransportProtos.PostAttributeMsg.Builder result = TransportProtos.PostAttributeMsg.newBuilder();
             result.addAllKv(keyValueProtos);
+            result.setShared(msg.getShared());
             return result.build();
         } else {
             throw new IllegalArgumentException("KeyValue list is empty!");
@@ -167,4 +176,32 @@ public class ProtoConverter {
         });
         return kvList;
     }
+
+    public static byte[] convertToRpcRequest(TransportProtos.ToDeviceRpcRequestMsg toDeviceRpcRequestMsg, DynamicMessage.Builder rpcRequestDynamicMessageBuilder) throws AdaptorException {
+        rpcRequestDynamicMessageBuilder = rpcRequestDynamicMessageBuilder.getDefaultInstanceForType().newBuilderForType();
+        JsonObject rpcRequestJson = new JsonObject();
+        rpcRequestJson.addProperty("method", toDeviceRpcRequestMsg.getMethodName());
+        rpcRequestJson.addProperty("requestId", toDeviceRpcRequestMsg.getRequestId());
+        String params = toDeviceRpcRequestMsg.getParams();
+        try {
+            JsonElement paramsElement = JSON_PARSER.parse(params);
+            rpcRequestJson.add("params", paramsElement);
+            DynamicMessage dynamicRpcRequest = DynamicProtoUtils.jsonToDynamicMessage(rpcRequestDynamicMessageBuilder, GSON.toJson(rpcRequestJson));
+            return dynamicRpcRequest.toByteArray();
+        } catch (Exception e) {
+            throw new AdaptorException("Failed to convert ToDeviceRpcRequestMsg to Dynamic Rpc request message due to: ", e);
+        }
+    }
+
+    public static Descriptors.Descriptor validateDescriptor(Descriptors.Descriptor descriptor) throws AdaptorException {
+        if (descriptor == null) {
+            throw new AdaptorException("Failed to get dynamic message descriptor!");
+        }
+        return descriptor;
+    }
+
+    public static String dynamicMsgToJson(byte[] bytes, Descriptors.Descriptor descriptor) throws InvalidProtocolBufferException {
+        return DynamicProtoUtils.dynamicMsgToJson(descriptor, bytes);
+    }
+
 }
