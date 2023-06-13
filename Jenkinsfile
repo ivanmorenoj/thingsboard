@@ -26,7 +26,7 @@ pipeline {
           script {
             try{
               sh """
-                trufflehog --no-update --only-verified --fail --json filesystem ./ | trufflehog-output.json
+                trufflehog --no-update --only-verified --fail --json filesystem ./ | tee trufflehog-output.json
               """
             } catch (Exception e){
               unstable('Trufflehog Exception')
