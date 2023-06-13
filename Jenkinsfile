@@ -27,9 +27,15 @@ pipeline {
             try{
               sh """
                 trufflehog --no-update --only-verified --fail --json filesystem ./ | tee trufflehog-output.json
+                
+                [[ -z \$(grep '[^[:space:]]' trufflehog-output.json) ]] && rm -v trufflehog-output.json
               """
             } catch (Exception e){
               unstable('Trufflehog Exception')
+            }
+
+            if (findFiles(glob: "trufflehog-output.json").length > 0) {
+              sh "cat trufflehog-output.json"
             }
           }
         }
@@ -49,6 +55,10 @@ pipeline {
               """
             } catch (Exception e) {
               unstable("Trivy vulnerabilities found!")
+            }
+
+            if (findFiles(glob: "trivy-findings.json").length > 0) {
+              sh "cat trivy-findings.json"
             }
           }
         }
