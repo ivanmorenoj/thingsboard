@@ -34,7 +34,7 @@ pipeline {
               unstable('Trufflehog Exception')
             }
 
-            if (findFiles(glob: "trufflehog-output.json").length > 0) {
+            if (fileExists('trufflehog-output.json')) {
               sh "cat trufflehog-output.json"
             }
           }
@@ -57,7 +57,7 @@ pipeline {
               unstable("Trivy vulnerabilities found!")
             }
 
-            if (findFiles(glob: "trivy-findings.json").length > 0) {
+            if (fileExists("trivy-findings.json")) {
               sh "cat trivy-findings.json"
             }
           }
