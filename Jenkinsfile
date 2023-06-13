@@ -7,20 +7,14 @@ pipeline {
         containers:
         - name: trufflehog
           image: trufflesecurity/trufflehog:3.34.0
-          workingDir: /home/jenkins
           command:
           - /bin/cat
           tty: true
-          securitycontext:
-            runAsUser: 1000
         - name: trivy
           image: aquasec/trivy:0.41.0
-          workingDir: /home/jenkins
           command:
           - /bin/cat
           tty: true
-          securitycontext:
-            runAsUser: 1000
       '''
     }
   }
