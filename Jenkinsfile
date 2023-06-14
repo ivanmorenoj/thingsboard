@@ -122,7 +122,7 @@ pipeline {
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/engagements/" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
                   --header 'Content-Type: application/json' \
-                    --data-raw \\"{
+                    --data-raw "{
                       \\"tags\\": [\\"JenkinsCI\\"],
                       \\"name\\": \\"#${BUILD_DISPLAY_NAME}\\",
                       \\"description\\": \\"test\\",
@@ -142,7 +142,7 @@ pipeline {
                       \\"build_server\\": ${DEFECTDOJO_ENGAGEMENT_BUILD_SERVER},
                       \\"source_code_management_server\\": ${DEFECTDOJO_ENGAGEMENT_SOURCE_CODE_MANAGEMENT_SERVER},
                       \\"orchestration_engine\\": ${DEFECTDOJO_ENGAGEMENT_ORCHESTRATION_ENGINE}
-                    }\\" -o engagement-response.json
+                    }" -o engagement-response.json
               """
 
               env.ENGAGEMENT_ID = sh (script: """
