@@ -63,6 +63,7 @@ pipeline {
             }
 
             if (fileExists('trufflehog-output.json')) {
+              archiveArtifacts artifacts: "trufflehog-output.json"
               sh "cat trufflehog-output.json"
             }
           }
