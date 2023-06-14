@@ -116,8 +116,8 @@ pipeline {
 
               sh label: "Create an engagement",
               script: """
-                curl --fail --location --request POST "${DEFECDOJO_HOST}/api/v2/engagements/" \
-                  --header "Authorization: Token ${DEFECTDOJO_API_TOKEN}" \
+                curl --fail --location --request POST "${env.DEFECDOJO_HOST}/api/v2/engagements/" \
+                  --header "Authorization: Token ${env.DEFECTDOJO_API_TOKEN}" \
                   --header 'Content-Type: application/json' \
                     --data-raw "{
                       \"tags\": [\"JenkinsCI\"],
@@ -148,8 +148,8 @@ pipeline {
 
               sh label: "Upload artifact",
               script: """
-                curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
-                  --header "Authorization: Token ${DEFECTDOJO_API_TOKEN}" \
+                curl --fail --location --request POST "${env.DEFECTDOJO_HOST}/api/v2/import-scan/" \
+                  --header "Authorization: Token ${env.DEFECTDOJO_API_TOKEN}" \
                   --form "scan_date=\"${TODAY}\"" \
                   --form "minimum_severity=\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\"" \
                   --form "active=\"${DEFECTDOJO_SCAN_ACTIVE}\"" \
