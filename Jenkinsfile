@@ -77,6 +77,18 @@ pipeline {
           script: """
             apk add --no-cache jq curl 
           """
+
+          script {
+            if (fileExists('trufflehog-output.json')) {
+              echo "Trufflehog vulnerabilities found!!"
+              sh "cat trufflehog-output.json"
+            }
+
+            if (fileExists("trivy-findings.json")) {
+              echo "Trivy vulnerabilities found!!"
+              sh "cat trivy-findings.json"
+            }
+          }
         }
       }
     }
