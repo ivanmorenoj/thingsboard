@@ -120,7 +120,7 @@ pipeline {
               sh label: "Create an engagement",
               script: """
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/engagements/" \
-                  --header "Authorization: Token ${DEFECTDOJO_API_TOKEN}" \
+                  --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
                   --header 'Content-Type: application/json' \
                     --data-raw "{
                       \"tags\": [\"JenkinsCI\"],
