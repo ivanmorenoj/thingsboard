@@ -5,8 +5,8 @@ pipeline {
       yaml '''
       spec:
         containers:
-        - name: alpine
-          image: alpine
+        - name: debian
+          image: debian
           command:
           - /bin/cat
           tty: true
@@ -97,10 +97,11 @@ pipeline {
 
     stage('Upload to DefectDojo') {
       steps {
-        container(name: 'alpine') {
+        container(name: 'debian') {
           sh label: "Intall required packages",
           script: """
-            apk add --no-cache jq curl 
+            apt-get update
+            apt-get install -y jq curl
           """
 
           script {
