@@ -25,8 +25,6 @@ pipeline {
   }
 
   environment {
-    DEFECTDOJO_API_KEY = credentials('defectdojo-api-token')
-    DEFECTDOJO_HOST = credentials('defectdojo-host')
 
     DEFECTDOJO_ENGAGEMENT_PERIOD='7'
     DEFECTDOJO_ENGAGEMENT_STATUS='Not Started'
@@ -78,7 +76,7 @@ pipeline {
           script {
             try {
               sh """
-                trivy fs --quiet --no-progress --scanners vuln,secret,config --format table ./
+                #trivy fs --quiet --no-progress --scanners vuln,secret,config --format table ./
                 trivy fs --exit-code 1 --severity LOW,MEDIUM,HIGH,CRITICAL --scanners vuln,config \
                   --quiet --format json \
                   --output trivy-findings.json ./
@@ -96,6 +94,10 @@ pipeline {
     }
 
     stage('Upload to DefectDojo') {
+      environment {
+        DEFECTDOJO_API_KEY = credentials('defectdojo-api-token')
+        DEFECTDOJO_HOST = credentials('defectdojo-host')
+      }
       steps {
         container(name: 'debian') {
           sh label: "Intall required packages",
@@ -116,8 +118,8 @@ pipeline {
 
               sh label: "Create an engagement",
               script: """
-                curl --fail --location --request POST "$DEFECDOJO_HOST/api/v2/engagements/" \
-                  --header "Authorization: Token $DEFECTDOJO_API_TOKEN" \
+                curl --fail --location --request POST "${DEFECDOJO_HOST}/api/v2/engagements/" \
+                  --header "Authorization: Token ${DEFECTDOJO_API_TOKEN}" \
                   --header 'Content-Type: application/json' \
                     --data-raw "{
                       \"tags\": [\"JenkinsCI\"],
