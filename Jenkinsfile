@@ -153,7 +153,7 @@ pipeline {
                 """, returnStdout: true).trim()
 
               sh label: "Upload artifact",
-              script: """
+              script: '''
                 curl -v --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
                   --form "scan_date=\\"${TODAY}\\"" \
@@ -164,7 +164,7 @@ pipeline {
                   --form "engagement=\\"${ENGAGEMENT_ID}\\"" \
                   --form \"file=@trufflehog-output.json\" \
                   --form "environment=\\"${DEFECTDOJO_SCAN_ENVIRONMENT}\\""
-              """
+              '''
             }
 
             if (fileExists("trivy-findings.json")) {
