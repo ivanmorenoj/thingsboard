@@ -5,13 +5,18 @@ pipeline {
       yaml '''
       spec:
         containers:
+        - name: alpine
+          image: alpine
+          command:
+          - /bin/cat
+          tty: true
         - name: trufflehog
-          image: trufflesecurity/trufflehog:3.34.0
+          image: trufflesecurity/trufflehog:3.40.0
           command:
           - /bin/cat
           tty: true
         - name: trivy
-          image: aquasec/trivy:0.41.0
+          image: aquasec/trivy:0.42.1
           command:
           - /bin/cat
           tty: true
@@ -61,6 +66,17 @@ pipeline {
               sh "cat trivy-findings.json"
             }
           }
+        }
+      }
+    }
+
+    stage('Upload to DefectDojo') {
+      steps {
+        container(name: 'alpine') {
+          sh label: "Intall required packages",
+          script: """
+            apk add --no-cache jq curl 
+          """
         }
       }
     }
