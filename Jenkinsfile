@@ -122,27 +122,27 @@ pipeline {
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/engagements/" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
                   --header 'Content-Type: application/json' \
-                    --data-raw "{
-                      \"tags\": [\"JenkinsCI\"],
-                      \"name\": \"#${BUILD_DISPLAY_NAME}\",
-                      \"description\": \"test\",
-                      \"version\": \"test1.1\",
-                      \"first_contacted\": \"${TODAY}\",
-                      \"target_start\": \"${TODAY}\",
-                      \"target_end\": \"${ENDDAY}\",
-                      \"reason\": \"string\",
-                      \"threat_model\": \"${DEFECTDOJO_ENGAGEMENT_THREAT_MODEL}\",
-                      \"api_test\": \"${DEFECTDOJO_ENGAGEMENT_API_TEST}\",
-                      \"pen_test\": \"${DEFECTDOJO_ENGAGEMENT_PEN_TEST}\",
-                      \"check_list\": \"${DEFECTDOJO_ENGAGEMENT_CHECK_LIST}\",
-                      \"status\": \"${DEFECTDOJO_ENGAGEMENT_STATUS}\",
-                      \"engagement_type\": \"CI/CD\",
-                      \"product\": \"10\",
-                      \"deduplication_on_engagement\": \"${DEFECTDOJO_ENGAGEMENT_DEDUPLICATION_ON_ENGAGEMENT}\",
-                      \"build_server\": ${DEFECTDOJO_ENGAGEMENT_BUILD_SERVER},
-                      \"source_code_management_server\": ${DEFECTDOJO_ENGAGEMENT_SOURCE_CODE_MANAGEMENT_SERVER},
-                      \"orchestration_engine\": ${DEFECTDOJO_ENGAGEMENT_ORCHESTRATION_ENGINE}
-                    }" -o engagement-response.json
+                    --data-raw \\"{
+                      \\"tags\\": [\\"JenkinsCI\\"],
+                      \\"name\\": \\"#${BUILD_DISPLAY_NAME}\\",
+                      \\"description\\": \\"test\\",
+                      \\"version\\": \\"test1.1\\",
+                      \\"first_contacted\\": \\"${TODAY}\\",
+                      \\"target_start\\": \\"${TODAY}\\",
+                      \\"target_end\\": \\"${ENDDAY}\\",
+                      \\"reason\\": \\"string\\",
+                      \\"threat_model\\": \\"${DEFECTDOJO_ENGAGEMENT_THREAT_MODEL}\\",
+                      \\"api_test\\": \\"${DEFECTDOJO_ENGAGEMENT_API_TEST}\\",
+                      \\"pen_test\\": \\"${DEFECTDOJO_ENGAGEMENT_PEN_TEST}\\",
+                      \\"check_list\\": \\"${DEFECTDOJO_ENGAGEMENT_CHECK_LIST}\\",
+                      \\"status\\": \\"${DEFECTDOJO_ENGAGEMENT_STATUS}\\",
+                      \\"engagement_type\\": \\"CI/CD\\",
+                      \\"product\\": \\"10\\",
+                      \\"deduplication_on_engagement\\": \\"${DEFECTDOJO_ENGAGEMENT_DEDUPLICATION_ON_ENGAGEMENT}\\",
+                      \\"build_server\\": ${DEFECTDOJO_ENGAGEMENT_BUILD_SERVER},
+                      \\"source_code_management_server\\": ${DEFECTDOJO_ENGAGEMENT_SOURCE_CODE_MANAGEMENT_SERVER},
+                      \\"orchestration_engine\\": ${DEFECTDOJO_ENGAGEMENT_ORCHESTRATION_ENGINE}
+                    }\\" -o engagement-response.json
               """
 
               env.ENGAGEMENT_ID = sh (script: """
