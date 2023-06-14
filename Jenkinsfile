@@ -146,22 +146,22 @@ pipeline {
               """
 
               env.ENGAGEMENT_ID = sh (script: """
-                jq -r . '.id' engagement-response.json
+                jq -r '.id' engagement-response.json
                 """, returnStdout: true).trim()
 
               sh label: "Upload artifact",
               script: """
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
-                  --form "scan_date=\"${TODAY}\"" \
-                  --form "minimum_severity=\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\"" \
-                  --form "active=\"${DEFECTDOJO_SCAN_ACTIVE}\"" \
-                  --form "verified=\"${DEFECTDOJO_SCAN_VERIFIED}\"" \
-                  --form "scan_type=\"Trufflehog3 Scan\"" \
-                  --form "engagement=\"${ENGAGEMENT_ID}\"" \
-                  --form "file=@trufflehog-output.json" \
-                  --form "test_type=\"${DEFECTDOJO_SCAN_TEST_TYPE}\"" \
-                  --form "environment=\"${DEFECTDOJO_SCAN_ENVIRONMENT}\""
+                  --form "scan_date=\\"${TODAY}\\"" \\
+                  --form "minimum_severity=\\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\\"" \\
+                  --form "active=\\"${DEFECTDOJO_SCAN_ACTIVE}\\"" \\
+                  --form "verified=\\"${DEFECTDOJO_SCAN_VERIFIED}\\"" \\
+                  --form "scan_type=\\"Trufflehog3 Scan\\"" \\
+                  --form "engagement=\\"${ENGAGEMENT_ID}\\"" \\
+                  --form "file=@trufflehog-output.json" \\
+                  --form "test_type=\\"${DEFECTDOJO_SCAN_TEST_TYPE}\\"" \\
+                  --form "environment=\\"${DEFECTDOJO_SCAN_ENVIRONMENT}\\""
               """
             }
 
