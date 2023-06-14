@@ -163,7 +163,7 @@ pipeline {
                   --form "minimum_severity=${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}" \
                   --form "active=${DEFECTDOJO_SCAN_ACTIVE}" \
                   --form "verified=${DEFECTDOJO_SCAN_VERIFIED}" \
-                  --form "scan_type=Trufflehog3 Scan" \
+                  --form "scan_type=Trufflehog Scan" \
                   --form "engagement=${ENGAGEMENT_ID}" \
                   --form "file=@trufflehog-output.json;type=application/json" \
                   --form "environment=${DEFECTDOJO_SCAN_ENVIRONMENT}"
