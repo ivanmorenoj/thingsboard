@@ -6,7 +6,7 @@ pipeline {
       spec:
         containers:
         - name: debian
-          image: debian
+          image: debian:11-slim
           command:
           - /bin/cat
           tty: true
@@ -154,7 +154,7 @@ pipeline {
 
               sh label: "Upload artifact",
               script: '''
-                curl -v --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
+                curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
                   --header 'accept: application/json' \
                   --header 'Content-Type: multipart/form-data' \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
