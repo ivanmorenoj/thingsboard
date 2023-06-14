@@ -155,15 +155,17 @@ pipeline {
               sh label: "Upload artifact",
               script: '''
                 curl -v --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
+                  --header 'accept: application/json' \
+                  --header 'Content-Type: multipart/form-data' \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
-                  --form "scan_date=\\"${TODAY}\\"" \
-                  --form "minimum_severity=\\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\\"" \
-                  --form "active=\\"${DEFECTDOJO_SCAN_ACTIVE}\\"" \
-                  --form "verified=\\"${DEFECTDOJO_SCAN_VERIFIED}\\"" \
-                  --form "scan_type=\\"Trufflehog3 Scan\\"" \
-                  --form "engagement=\\"${ENGAGEMENT_ID}\\"" \
+                  --form "scan_date=${TODAY}" \
+                  --form "minimum_severity=${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}" \
+                  --form "active=${DEFECTDOJO_SCAN_ACTIVE}" \
+                  --form "verified=${DEFECTDOJO_SCAN_VERIFIED}" \
+                  --form "scan_type=Trufflehog3 Scan" \
+                  --form "engagement=${ENGAGEMENT_ID}" \
                   --form "file=@trufflehog-output.json" \
-                  --form "environment=\\"${DEFECTDOJO_SCAN_ENVIRONMENT}\\""
+                  --form "environment=${DEFECTDOJO_SCAN_ENVIRONMENT}"
               '''
             }
 
