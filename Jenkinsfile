@@ -1,3 +1,8 @@
+def Greet(name) {
+    echo "Hello ${name}"
+    return sh(script: 'date', returnStdout: true).trim()
+}
+
 pipeline {
   agent {
     kubernetes {
@@ -52,6 +57,8 @@ pipeline {
       steps {
         container(name: 'trufflehog') {
           script {
+            def a = Greet('hello')
+            echo a
             try{
               sh """
                 trufflehog --no-update --only-verified --fail --json filesystem ./ | tee trufflehog-output.json
