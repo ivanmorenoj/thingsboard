@@ -112,6 +112,7 @@ pipeline {
           script: """
             apt-get update
             apt-get install -y --no-install-recommends jq curl git
+            git config --global --add safe.directory '*'
           """
 
           script {
