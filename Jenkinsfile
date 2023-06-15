@@ -118,6 +118,7 @@ pipeline {
 
             env.TODAY = sh (script: "date +%Y-%m-%d", returnStdout: true).trim()
             env.ENDDAY = sh (script: "date -d '+1 days' +%Y-%m-%d", returnStdout: true).trim()
+            env.GIT_COMMIT_MSG = sh (script: 'git log -1 --pretty=%B', returnStdout: true).trim()
             
 
             if (fileExists('trufflehog-output.json')) {
@@ -132,8 +133,8 @@ pipeline {
                     --data-raw "{
                       \\"tags\\": [\\"JenkinsCI\\"],
                       \\"name\\": \\"${BUILD_DISPLAY_NAME}\\",
-                      \\"description\\": \\"test\\",
-                      \\"version\\": \\"test1.1\\",
+                      \\"description\\": \\"${GIT_COMMIT_MSG}\\",
+                      \\"version\\": \\"${BRANCH_NAME}\\",
                       \\"first_contacted\\": \\"${TODAY}\\",
                       \\"target_start\\": \\"${TODAY}\\",
                       \\"target_end\\": \\"${ENDDAY}\\",
@@ -159,17 +160,17 @@ pipeline {
               sh label: "Upload artifact",
               script: '''
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
-                  --header 'accept: application/json' \
-                  --header 'Content-Type: multipart/form-data' \
+                  --header "accept: application/json" \
+                  --header "Content-Type: multipart/form-data" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
-                  --form "scan_date=${TODAY}" \
-                  --form "minimum_severity=${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}" \
-                  --form "active=${DEFECTDOJO_SCAN_ACTIVE}" \
-                  --form "verified=${DEFECTDOJO_SCAN_VERIFIED}" \
-                  --form "scan_type=Trufflehog Scan" \
-                  --form "engagement=${ENGAGEMENT_ID}" \
+                  --form "scan_date=\\"${TODAY}\\"" \
+                  --form "minimum_severity=\\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\\"" \
+                  --form "active=\\"${DEFECTDOJO_SCAN_ACTIVE}\\"" \
+                  --form "verified=\\"${DEFECTDOJO_SCAN_VERIFIED}\\"" \
+                  --form "scan_type=\\"Trufflehog Scan\\"" \
+                  --form "engagement=\\"${ENGAGEMENT_ID}\\"" \
                   --form "file=@trufflehog-output.json;type=application/json" \
-                  --form "environment=${DEFECTDOJO_SCAN_ENVIRONMENT}"
+                  --form "environment=\\"${DEFECTDOJO_SCAN_ENVIRONMENT}\\""
               '''
             }
 
@@ -184,8 +185,8 @@ pipeline {
                     --data-raw "{
                       \\"tags\\": [\\"JenkinsCI\\"],
                       \\"name\\": \\"${BUILD_DISPLAY_NAME}\\",
-                      \\"description\\": \\"test\\",
-                      \\"version\\": \\"test1.1\\",
+                      \\"description\\": \\"${GIT_COMMIT_MSG}\\",
+                      \\"version\\": \\"${BRANCH_NAME}\\",
                       \\"first_contacted\\": \\"${TODAY}\\",
                       \\"target_start\\": \\"${TODAY}\\",
                       \\"target_end\\": \\"${ENDDAY}\\",
@@ -211,17 +212,17 @@ pipeline {
               sh label: "Upload artifact",
               script: '''
                 curl --fail --location --request POST "${DEFECTDOJO_HOST}/api/v2/import-scan/" \
-                  --header 'accept: application/json' \
-                  --header 'Content-Type: multipart/form-data' \
+                  --header "accept: application/json" \
+                  --header "Content-Type: multipart/form-data" \
                   --header "Authorization: Token ${DEFECTDOJO_API_KEY}" \
-                  --form "scan_date=${TODAY}" \
-                  --form "minimum_severity=${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}" \
-                  --form "active=${DEFECTDOJO_SCAN_ACTIVE}" \
-                  --form "verified=${DEFECTDOJO_SCAN_VERIFIED}" \
-                  --form "scan_type=Trivy Scan" \
-                  --form "engagement=${ENGAGEMENT_ID}" \
-                  --form "file=@trivy-findings.json;type=application/json" \
-                  --form "environment=${DEFECTDOJO_SCAN_ENVIRONMENT}"
+                  --form "scan_date=\\"${TODAY}\\"" \
+                  --form "minimum_severity=\\"${DEFECTDOJO_SCAN_MINIMUM_SEVERITY}\\"" \
+                  --form "active=\\"${DEFECTDOJO_SCAN_ACTIVE}\\"" \
+                  --form "verified=\\"${DEFECTDOJO_SCAN_VERIFIED}\\"" \
+                  --form "scan_type=\\"Trufflehog Scan\\"" \
+                  --form "engagement=\\"${ENGAGEMENT_ID}\\"" \
+                  --form "file=@trufflehog-output.json;type=application/json" \
+                  --form "environment=\\"${DEFECTDOJO_SCAN_ENVIRONMENT}\\""
               '''
             }
           }
