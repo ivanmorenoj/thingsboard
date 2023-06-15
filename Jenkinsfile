@@ -119,7 +119,7 @@ pipeline {
 
             env.TODAY = sh (script: "date +%Y-%m-%d", returnStdout: true).trim()
             env.ENDDAY = sh (script: "date -d '+1 days' +%Y-%m-%d", returnStdout: true).trim()
-            env.GIT_COMMIT_MSG = sh (script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+            env.GIT_COMMIT_MSG = sh (script: "git log -1 --pretty=%B | head -n 30", returnStdout: true).trim()
             
 
             if (fileExists('trufflehog-output.json')) {
