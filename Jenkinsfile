@@ -111,7 +111,7 @@ pipeline {
           sh label: "Intall required packages",
           script: """
             apt-get update
-            apt-get install -y --no-install-recommends jq curl git
+            apt-get install -y jq curl git
             git config --global --add safe.directory '*'
           """
 
