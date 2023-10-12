@@ -26,7 +26,7 @@ import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.widget.WidgetsBundle;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.model.sql.WidgetsBundleEntity;
-import org.thingsboard.server.dao.sql.JpaAbstractSearchTextDao;
+import org.thingsboard.server.dao.sql.JpaAbstractDao;
 import org.thingsboard.server.dao.util.SqlDao;
 import org.thingsboard.server.dao.widget.WidgetsBundleDao;
 
@@ -41,7 +41,7 @@ import static org.thingsboard.server.dao.model.ModelConstants.NULL_UUID;
  */
 @Component
 @SqlDao
-public class JpaWidgetsBundleDao extends JpaAbstractSearchTextDao<WidgetsBundleEntity, WidgetsBundle> implements WidgetsBundleDao {
+public class JpaWidgetsBundleDao extends JpaAbstractDao<WidgetsBundleEntity, WidgetsBundle> implements WidgetsBundleDao {
 
     @Autowired
     private WidgetsBundleRepository widgetsBundleRepository;
@@ -62,13 +62,22 @@ public class JpaWidgetsBundleDao extends JpaAbstractSearchTextDao<WidgetsBundleE
     }
 
     @Override
-    public PageData<WidgetsBundle> findSystemWidgetsBundles(TenantId tenantId, PageLink pageLink) {
-        return DaoUtil.toPageData(
-                widgetsBundleRepository
-                        .findSystemWidgetsBundles(
-                                NULL_UUID,
-                                Objects.toString(pageLink.getTextSearch(), ""),
-                                DaoUtil.toPageable(pageLink)));
+    public PageData<WidgetsBundle> findSystemWidgetsBundles(TenantId tenantId, boolean fullSearch, PageLink pageLink) {
+        if (fullSearch) {
+            return DaoUtil.toPageData(
+                    widgetsBundleRepository
+                            .findSystemWidgetsBundlesFullSearch(
+                                    NULL_UUID,
+                                    Objects.toString(pageLink.getTextSearch(), ""),
+                                    DaoUtil.toPageable(pageLink)));
+        } else {
+            return DaoUtil.toPageData(
+                    widgetsBundleRepository
+                            .findSystemWidgetsBundles(
+                                    NULL_UUID,
+                                    Objects.toString(pageLink.getTextSearch(), ""),
+                                    DaoUtil.toPageable(pageLink)));
+        }
     }
 
     @Override
@@ -82,14 +91,24 @@ public class JpaWidgetsBundleDao extends JpaAbstractSearchTextDao<WidgetsBundleE
     }
 
     @Override
-    public PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantId(UUID tenantId, PageLink pageLink) {
-        return DaoUtil.toPageData(
-                widgetsBundleRepository
-                        .findAllTenantWidgetsBundlesByTenantId(
-                                tenantId,
-                                NULL_UUID,
-                                Objects.toString(pageLink.getTextSearch(), ""),
-                                DaoUtil.toPageable(pageLink)));
+    public PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantId(UUID tenantId, boolean fullSearch, PageLink pageLink) {
+        if (fullSearch) {
+            return DaoUtil.toPageData(
+                    widgetsBundleRepository
+                            .findAllTenantWidgetsBundlesByTenantIdFullSearch(
+                                    tenantId,
+                                    NULL_UUID,
+                                    Objects.toString(pageLink.getTextSearch(), ""),
+                                    DaoUtil.toPageable(pageLink)));
+        } else {
+            return DaoUtil.toPageData(
+                    widgetsBundleRepository
+                            .findAllTenantWidgetsBundlesByTenantId(
+                                    tenantId,
+                                    NULL_UUID,
+                                    Objects.toString(pageLink.getTextSearch(), ""),
+                                    DaoUtil.toPageable(pageLink)));
+        }
     }
 
     @Override
